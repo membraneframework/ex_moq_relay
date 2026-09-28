@@ -6,7 +6,7 @@ defmodule ExMoQ.Test.RelayTest do
   @moduletag :tmp_dir
 
   test "raises without a relay binary", %{tmp_dir: dir} do
-    assert_raise RuntimeError, ~r/no moq-relay binary/, fn ->
+    assert_raise ArgumentError, ~r/no moq-relay binary/, fn ->
       Relay.start_supervised!(Path.join(dir, "missing"))
     end
   end

@@ -15,7 +15,7 @@ defmodule ExMoQ.Relay.MixProject do
 
       # hex
       description:
-        "Runs a moq-relay binary as a supervised OS process, with readiness and output capture",
+        "Runs a moq-relay binary as a supervised OS process that is ready when started",
       package: package(),
 
       # docs

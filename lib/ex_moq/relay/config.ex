@@ -1,18 +1,18 @@
 defmodule ExMoQ.Relay.Config do
   @moduledoc """
-  What `ExMoQ.Relay` runs, built with `new!/1`:
+  What `ExMoQ.Relay` runs. Build it with `new!/1`, which picks the `:auto`
+  ports, so the relay's URLs are known before it starts:
 
-      config = ExMoQ.Relay.Config.new!(tcp: :auto, web: :auto)
-      config.tcp  #=> 54321
+      config = ExMoQ.Relay.Config.new!(tcp: :auto)
+      ExMoQ.Relay.tcp_url(config)  #=> "tcp://127.0.0.1:54321"
 
-  A config from `new!/1` has every port chosen, so the relay's URLs are known
-  before it starts. `ExMoQ.Relay` expects such a config; a hand-built
-  `%Config{}` is not checked.
+  A port is free when `new!/1` picks it, but another process can take it
+  before the relay binds it.
 
   ## Options
 
-    * `:binary` - path to the relay. Defaults to `$MOQ_RELAY`, then
-      `moq-relay` on `$PATH`.
+    * `:binary` - path to the relay; see `ExMoQ.Relay.find_binary/1` for
+      the default.
     * `:ip` - the address the listeners bind to (default `{127, 0, 0, 1}`).
     * `:quic` - the QUIC listener: `:auto` (default), a port, or `nil`. Its
       certificate is generated for `"localhost"`; `{port, tls_generate: host}`
@@ -29,16 +29,14 @@ defmodule ExMoQ.Relay.Config do
       for none.
     * `:log_level` - the relay's log level (default `"warn"`).
     * `:args` - extra command-line arguments.
-    * `:on_output` - a function called with each output line. Without one,
-      lines are logged at `:log_output` (default `:info`; `nil` drops them).
-    * `:ready` - the listener probed before `start_link` returns: `:internal`,
-      `:web`, `:tcp` or `:none`. The default, `:auto`, is the first of those
-      that is on.
+    * `:output` - where the relay's output lines go: a `Logger` level to log
+      them at (default `:info`), a 1-arity function to call with each, or
+      `nil` to drop them.
+    * `:ready` - the listener `ExMoQ.Relay.start_link/1` waits for:
+      `:internal`, `:web`, `:tcp` or `:none`. The default, `:auto`, is the
+      first of those that is on.
     * `:ready_timeout` - milliseconds to wait for readiness (default 15 000).
     * `:name` - a name to register the relay's process under (default `nil`).
-
-  `:auto` means a port that is free when `new!/1` picks it; another process
-  can take it before the relay binds it.
   """
 
   @typedoc "A listener port as given to `new!/1`."
@@ -49,6 +47,9 @@ defmodule ExMoQ.Relay.Config do
 
   @typedoc "Options of the QUIC listener, for `{port, opts}` in `:quic`."
   @type quic_listener_opts :: [{:tls_generate, String.t() | nil}]
+
+  @typedoc "Where the relay's output lines go."
+  @type output :: Logger.level() | (String.t() -> any()) | nil
 
   @typedoc "The listeners `:ready` can probe."
   @type probed_listener :: :internal | :web | :tcp
@@ -61,14 +62,13 @@ defmodule ExMoQ.Relay.Config do
           | {:auth_public, String.t() | [String.t()] | nil}
           | {:log_level, String.t()}
           | {:args, [String.t()]}
-          | {:on_output, (String.t() -> any()) | nil}
-          | {:log_output, Logger.level() | nil}
+          | {:output, output()}
           | {:ready, :auto | probed_listener() | :none}
           | {:ready_timeout, non_neg_integer()}
           | {:name, GenServer.name() | nil}
 
   @type t :: %__MODULE__{
-          binary: Path.t() | nil,
+          binary: Path.t(),
           ip: :inet.ip_address(),
           quic: {:inet.port_number(), quic_listener_opts()} | nil,
           tcp: :inet.port_number() | nil,
@@ -77,8 +77,7 @@ defmodule ExMoQ.Relay.Config do
           auth_public: String.t() | [String.t()] | nil,
           log_level: String.t(),
           args: [String.t()],
-          on_output: (String.t() -> any()) | nil,
-          log_output: Logger.level() | nil,
+          output: output(),
           ready: probed_listener() | :none,
           ready_timeout: non_neg_integer(),
           name: GenServer.name() | nil
@@ -93,22 +92,22 @@ defmodule ExMoQ.Relay.Config do
             auth_public: "**",
             log_level: "warn",
             args: [],
-            on_output: nil,
-            log_output: :info,
+            output: :info,
             ready: :auto,
             ready_timeout: 15_000,
             name: nil
 
   @doc """
-  Builds a config from options, choosing a free port for each `:auto`
-  listener.
+  Builds a config from options.
 
-  Raises `KeyError` for an unknown option and `ArgumentError` for a value or
-  combination the relay cannot run with.
+  Raises `KeyError` for an unknown option and `ArgumentError` when the relay
+  binary is not found or the options are ones the relay cannot run with.
   """
   @spec new!([option()]) :: t()
   def new!(opts \\ []) when is_list(opts) do
     %__MODULE__{ip: ip} = config = struct!(__MODULE__, opts)
+    binary = binary!(config.binary)
+    output!(config.output)
     quic = quic!(config.quic)
     Enum.each([:tcp, :web, :internal], &port!(&1, Map.fetch!(config, &1)))
 
@@ -117,13 +116,34 @@ defmodule ExMoQ.Relay.Config do
 
     config = %__MODULE__{
       config
-      | quic: with({port, tls} <- quic, do: {free_port(port, :udp, ip), tls}),
+      | binary: binary,
+        quic: with({port, tls} <- quic, do: {free_port(port, :udp, ip), tls}),
         tcp: free_port(config.tcp, :tcp, ip),
         web: free_port(config.web, :tcp, ip),
         internal: free_port(config.internal, :tcp, ip)
     }
 
     %__MODULE__{config | ready: ready!(config)}
+  end
+
+  @spec binary!(Path.t() | nil) :: Path.t()
+  defp binary!(binary) do
+    ExMoQ.Relay.find_binary(binary) ||
+      raise ArgumentError, "no moq-relay binary found; see ExMoQ.Relay.find_binary/1"
+  end
+
+  @spec output!(term()) :: :ok
+  defp output!(output) when output == nil or is_function(output, 1), do: :ok
+
+  defp output!(level) do
+    if level not in Logger.levels(),
+      do:
+        raise(
+          ArgumentError,
+          ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(level)}"
+        )
+
+    :ok
   end
 
   @spec quic!(term()) :: {:auto | :inet.port_number(), quic_listener_opts()} | nil

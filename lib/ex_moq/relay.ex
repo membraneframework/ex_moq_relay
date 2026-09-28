@@ -1,27 +1,14 @@
 defmodule ExMoQ.Relay do
   @moduledoc """
   Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS
-  process. Requires moq-relay 0.15.0 or later.
+  process, configured with `ExMoQ.Relay.Config`.
 
-  Ports are chosen before the relay starts, so a config is all it takes to
-  reach the relay:
-
-      config = ExMoQ.Relay.Config.new!(tcp: :auto, web: :auto)
-      {:ok, relay} = ExMoQ.Relay.start_link(config)
-      ExMoQ.Relay.tcp_url(config)     #=> "tcp://127.0.0.1:54321"
-      ExMoQ.Relay.quic_url(config)    #=> "https://127.0.0.1:54322"
-      ExMoQ.Relay.web_url(config)     #=> "http://127.0.0.1:54323"
-
-  `start_link/1` returns once the relay accepts connections. The returned
-  process owns the relay: the relay stops with it, and it exits with
-  `{:exit_status, status}` when the relay exits with a non-zero status.
-
-  Under a supervisor, whose `:restart` setting decides what happens when the
-  relay exits:
+  The process returned by `start_link/1` owns the relay: the relay stops with
+  it, and it exits with `{:exit_status, status}` when the relay exits with a
+  non-zero status. Under a supervisor, the `:restart` setting decides what
+  happens then:
 
       {ExMoQ.Relay, ExMoQ.Relay.Config.new!(quic: 4443, web: 4443, name: MyApp.Relay)}
-
-  The options are documented in `ExMoQ.Relay.Config`.
   """
 
   alias ExMoQ.Relay.Config
@@ -29,13 +16,11 @@ defmodule ExMoQ.Relay do
   @probe_interval_ms 100
 
   @typedoc """
-  Why the relay did not start: no binary, it exited (with the reason its
-  process exited with), or it did not accept connections within the given
-  milliseconds.
+  Why the relay did not start: it exited (with the reason its process exited
+  with), or it did not accept connections within the given milliseconds.
   """
   @type start_error ::
-          :no_binary
-          | {:exited, reason :: term()}
+          {:exited, reason :: term()}
           | {:not_ready, timeout_ms :: non_neg_integer()}
 
   @typedoc "Why `version/1` could not read the relay's version."
@@ -44,9 +29,17 @@ defmodule ExMoQ.Relay do
           | {:exit_status, integer(), output :: String.t()}
           | {:unexpected_output, term()}
 
+  @doc """
+  A child spec for the relay. Relays on different ports can share a
+  supervisor without explicit ids.
+  """
   @spec child_spec(Config.t()) :: Supervisor.child_spec()
   def child_spec(%Config{} = config) do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [config]}, type: :worker}
+    %{
+      id: {__MODULE__, quic_port(config), config.tcp},
+      start: {__MODULE__, :start_link, [config]},
+      type: :worker
+    }
   end
 
   @doc """
@@ -59,33 +52,27 @@ defmodule ExMoQ.Relay do
   @spec start_link(Config.t()) ::
           {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start_link(%Config{} = config) do
-    args = args(config)
-
-    case find_binary(config.binary) do
-      nil -> {:error, :no_binary}
-      binary -> start_daemon(binary, args, config)
+    with {:ok, daemon} <-
+           MuonTrap.Daemon.start_link(config.binary, args(config), daemon_opts(config)) do
+      await_ready(daemon, config)
     end
   end
 
   @doc """
-  Resolves the relay binary:
-  1. `binary` argument
-  2. `$MOQ_RELAY`
-  3. `moq-relay` on `$PATH`;
-  4. `nil` when none is an executable.
+  Finds the relay binary: `binary` if given, else `$MOQ_RELAY`, else
+  `moq-relay` on `$PATH`. Returns `nil` when that is not an executable.
   """
   @spec find_binary(Path.t() | nil) :: Path.t() | nil
   def find_binary(binary \\ nil) do
     System.find_executable(binary || System.get_env("MOQ_RELAY") || "moq-relay")
   end
 
-  @doc "The version the binary reports."
+  @doc "The relay binary's version, e.g. `\"0.15.8\"`."
   @spec version(Path.t() | nil) :: {:ok, String.t()} | {:error, version_error()}
   def version(binary \\ find_binary()) do
     with path when is_binary(path) <- binary || {:error, :no_binary},
-         {out, 0} <- System.cmd(path, ["--help"], stderr_to_stdout: true),
-         [line | _rest] <- String.split(out, "\n"),
-         ["moq-relay", version] <- String.split(String.trim(line), " ", parts: 2) do
+         {out, 0} <- System.cmd(path, ["--version"], stderr_to_stdout: true),
+         ["moq-relay", version] <- out |> String.trim() |> String.split(" ", parts: 2) do
       {:ok, version}
     else
       {:error, _reason} = error -> error
@@ -94,10 +81,7 @@ defmodule ExMoQ.Relay do
     end
   end
 
-  @doc """
-  The relay's command line. Exposed so a caller can see or test what will be
-  run.
-  """
+  @doc "The arguments the relay binary is run with."
   @spec args(Config.t()) :: [String.t()]
   def args(%Config{} = config) do
     listen = fn
@@ -132,18 +116,15 @@ defmodule ExMoQ.Relay do
   @spec quic_url(Config.t()) :: String.t() | nil
   def quic_url(%Config{} = config), do: url(config, "https", quic_port(config))
 
-  @doc "`tcp://host:port` of the plaintext TCP listener, or `nil`."
+  @doc "`tcp://host:port` of the TCP listener, or `nil`."
   @spec tcp_url(Config.t()) :: String.t() | nil
   def tcp_url(%Config{} = config), do: url(config, "tcp", config.tcp)
 
-  @doc """
-  `http://host:port` of the web listener (`/health`, `/certificate.sha256`,
-  `/fetch`), or `nil`.
-  """
+  @doc "`http://host:port` of the web listener, or `nil`."
   @spec web_url(Config.t()) :: String.t() | nil
   def web_url(%Config{} = config), do: url(config, "http", config.web)
 
-  @doc "`http://host:port` of the internal listener (`/health`, `/metrics`), or `nil`."
+  @doc "`http://host:port` of the internal listener, or `nil`."
   @spec internal_url(Config.t()) :: String.t() | nil
   def internal_url(%Config{} = config), do: url(config, "http", config.internal)
 
@@ -153,36 +134,13 @@ defmodule ExMoQ.Relay do
 
   ## Starting
 
-  @spec start_daemon(Path.t(), [String.t()], Config.t()) ::
-          {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  defp start_daemon(binary, args, config) do
-    with {:ok, daemon} <- MuonTrap.Daemon.start_link(binary, args, daemon_opts(config)) do
-      ref = Process.monitor(daemon)
-      deadline = System.monotonic_time(:millisecond) + config.ready_timeout
-
-      case await_ready(config, ready_port(config), ref, deadline) do
-        :ok ->
-          Process.demonitor(ref, [:flush])
-          {:ok, daemon}
-
-        {:error, {:not_ready, _timeout_ms}} = error ->
-          Process.demonitor(ref, [:flush])
-          stop(daemon)
-          error
-
-        {:error, {:exited, _reason}} = error ->
-          error
-      end
-    end
-  end
-
   @spec daemon_opts(Config.t()) :: keyword()
   defp daemon_opts(config) do
     output =
-      case config do
-        %Config{on_output: fun} when fun != nil -> [logger_fun: fun]
-        %Config{log_output: nil} -> [logger_fun: fn _line -> :ok end]
-        %Config{log_output: level} -> [log_output: level, log_prefix: "moq-relay: "]
+      case config.output do
+        nil -> [logger_fun: fn _line -> :ok end]
+        fun when is_function(fun, 1) -> [logger_fun: fun]
+        level -> [log_output: level, log_prefix: "moq-relay: "]
       end
 
     name = if config.name, do: [name: config.name], else: []
@@ -190,15 +148,31 @@ defmodule ExMoQ.Relay do
     [stderr_to_stdout: true, exit_status_to_reason: &{:exit_status, &1}] ++ output ++ name
   end
 
-  @spec ready_port(Config.t()) :: :inet.port_number() | nil
-  defp ready_port(%Config{ready: :none}), do: nil
-  defp ready_port(%Config{ready: listener} = config), do: Map.fetch!(config, listener)
+  @spec await_ready(pid(), Config.t()) :: {:ok, pid()} | {:error, start_error()}
+  defp await_ready(daemon, %Config{ready: :none}), do: {:ok, daemon}
 
-  @spec await_ready(Config.t(), :inet.port_number() | nil, reference(), integer()) ::
+  defp await_ready(daemon, %Config{ready: listener} = config) do
+    ref = Process.monitor(daemon)
+    deadline = System.monotonic_time(:millisecond) + config.ready_timeout
+
+    case poll(config, Map.fetch!(config, listener), ref, deadline) do
+      :ok ->
+        Process.demonitor(ref, [:flush])
+        {:ok, daemon}
+
+      {:error, {:not_ready, _timeout_ms}} = error ->
+        Process.demonitor(ref, [:flush])
+        stop(daemon)
+        error
+
+      {:error, {:exited, _reason}} = error ->
+        error
+    end
+  end
+
+  @spec poll(Config.t(), :inet.port_number(), reference(), integer()) ::
           :ok | {:error, start_error()}
-  defp await_ready(_config, nil, _ref, _deadline), do: :ok
-
-  defp await_ready(config, port, ref, deadline) do
+  defp poll(config, port, ref, deadline) do
     receive do
       {:DOWN, ^ref, :process, _daemon, reason} -> {:error, {:exited, reason}}
     after
@@ -211,7 +185,7 @@ defmodule ExMoQ.Relay do
             {:error, {:not_ready, config.ready_timeout}}
 
           true ->
-            await_ready(config, port, ref, deadline)
+            poll(config, port, ref, deadline)
         end
     end
   end

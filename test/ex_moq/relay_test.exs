@@ -39,6 +39,9 @@ defmodule ExMoQ.RelayTest do
     path
   end
 
+  # Any executable will do where the relay is not run.
+  defp config!(opts), do: Config.new!([binary: "/bin/sh"] ++ opts)
+
   # A listening socket owned by the test process, closed with it.
   defp listener() do
     {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
@@ -48,7 +51,7 @@ defmodule ExMoQ.RelayTest do
 
   describe "args/1" do
     test "renders the listeners that are asked for" do
-      assert Relay.args(Config.new!(quic: 4443, tcp: 4444, internal: 9101)) == [
+      assert Relay.args(config!(quic: 4443, tcp: 4444, internal: 9101)) == [
                "--log-level",
                "warn",
                "--listen",
@@ -66,7 +69,7 @@ defmodule ExMoQ.RelayTest do
 
     test "a TCP-only relay needs no certificate; patterns and extra args pass through" do
       assert Relay.args(
-               Config.new!(
+               config!(
                  quic: nil,
                  tcp: 1,
                  internal: nil,
@@ -86,7 +89,7 @@ defmodule ExMoQ.RelayTest do
     end
 
     test "every listener binds to :ip, and the web one may share the QUIC port" do
-      assert Relay.args(Config.new!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443, internal: nil)) == [
+      assert Relay.args(config!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443, internal: nil)) == [
                "--log-level",
                "warn",
                "--listen",
@@ -99,15 +102,13 @@ defmodule ExMoQ.RelayTest do
                "**"
              ]
 
-      assert Relay.args(
-               Config.new!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1, internal: nil)
-             ) ==
+      assert Relay.args(config!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1, internal: nil)) ==
                ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
     end
 
     test "auth_public: nil grants nothing, leaving auth to extra args" do
       assert Relay.args(
-               Config.new!(
+               config!(
                  quic: nil,
                  tcp: 1,
                  internal: nil,
@@ -125,7 +126,7 @@ defmodule ExMoQ.RelayTest do
     end
 
     test "the QUIC listener carries the host of its generated certificate, or none" do
-      assert Relay.args(Config.new!(quic: {4443, tls_generate: "relay.test"}, internal: nil)) ==
+      assert Relay.args(config!(quic: {4443, tls_generate: "relay.test"}, internal: nil)) ==
                [
                  "--log-level",
                  "warn",
@@ -137,7 +138,7 @@ defmodule ExMoQ.RelayTest do
                  "**"
                ]
 
-      assert Relay.args(Config.new!(quic: {4443, tls_generate: nil}, internal: nil)) ==
+      assert Relay.args(config!(quic: {4443, tls_generate: nil}, internal: nil)) ==
                ["--log-level", "warn", "--listen", "127.0.0.1:4443", "--auth-public", "**"]
     end
   end
@@ -151,11 +152,6 @@ defmodule ExMoQ.RelayTest do
   end
 
   describe "start_link/1" do
-    test "no binary", %{tmp_dir: dir} do
-      config = Config.new!(binary: Path.join(dir, "missing"))
-      assert {:error, :no_binary} = Relay.start_link(config)
-    end
-
     test "a relay that exits before it is ready reports its exit and logs its output",
          %{tmp_dir: dir} do
       config = Config.new!(binary: script!(dir, "failing", @fake_failing))
@@ -186,7 +182,7 @@ defmodule ExMoQ.RelayTest do
           binary: script!(dir, "alive", fake_alive(stop)),
           tcp: :auto,
           internal: listener(),
-          on_output: &send(me, {:line, &1})
+          output: &send(me, {:line, &1})
         )
 
       relay = start_supervised!(Supervisor.child_spec({Relay, config}, restart: :temporary))
@@ -225,7 +221,7 @@ defmodule ExMoQ.RelayTest do
       assert {:ok, version} = Relay.version()
       assert version =~ ~r/^\d+\.\d+\.\d+/
 
-      config = Config.new!(tcp: :auto, web: :auto, log_output: nil)
+      config = Config.new!(tcp: :auto, web: :auto, output: nil)
       {:ok, relay} = Relay.start_link(config)
 
       assert {200, _body} = get(config.internal, "/health")
