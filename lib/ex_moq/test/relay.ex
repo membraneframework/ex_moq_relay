@@ -70,9 +70,7 @@ defmodule ExMoQ.Test.Relay do
     do: ExUnit.Callbacks.stop_supervised!(id)
 
   @doc """
-  Resolves the moq-relay binary like `ExMoQ.Relay.find_binary/1`: the
-  `:binary` option, then `$MOQ_RELAY`, then `$PATH`; `nil` if none of them
-  yields an executable.
+  Resolves the moq-relay binary like `ExMoQ.Relay.find_binary/1`.
   """
   @spec find_binary([option()]) :: Path.t() | nil
   defdelegate find_binary(opts \\ []), to: ExMoQ.Relay

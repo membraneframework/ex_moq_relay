@@ -49,13 +49,6 @@ documented in `ExMoQ.Relay`.
 In ExUnit, `ExMoQ.Test.Relay.start_supervised!/1` runs a relay for the current
 test; add the package with `only: :test` for that.
 
-## Tests
-
-```
-mix test                    # with stand-in scripts, no relay needed
-mix test --include relay    # plus a run of the real binary ($MOQ_RELAY)
-```
-
 ## Copyright and License
 
 Copyright 2026, [Software Mansion](https://swmansion.com/?utm_source=git&utm_medium=readme&utm_campaign=ex_moq_relay)

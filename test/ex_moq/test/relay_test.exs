@@ -11,7 +11,7 @@ defmodule ExMoQ.Test.RelayTest do
     end
   end
 
-  @tag :relay
+  @tag :integration
   test "runs a TCP relay for the test and stops it on request" do
     relay = Relay.start_supervised!()
     assert %Relay{url: "tcp://127.0.0.1:" <> port, disable_tls_verify?: false} = relay

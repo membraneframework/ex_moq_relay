@@ -198,7 +198,7 @@ defmodule ExMoQ.RelayTest do
   end
 
   describe "a real moq-relay" do
-    @describetag :relay
+    @describetag :integration
 
     test "starts with every listener, reports a version, and stops" do
       assert {:ok, version} = Relay.version()
