@@ -41,7 +41,9 @@ defmodule ExMoQ.Relay do
       verification or pin the fingerprint.
     * `:auth_public` - path patterns an anonymous session may publish and
       subscribe to, a string or a list. The default, `"**"` (everything), is
-      meant for tests and local use.
+      meant for tests and local use. `nil` grants anonymous sessions nothing,
+      for narrower grants or token auth passed in `:args` (e.g.
+      `--auth-public-subscribe`).
     * `:log_level` - the relay's own log level (default `"warn"`).
     * `:args` - extra command-line arguments appended as given.
     * `:on_output` - a 1-arity function called with every output line. When
@@ -90,7 +92,7 @@ defmodule ExMoQ.Relay do
           | {:web, port_option()}
           | {:internal, port_option()}
           | {:tls_generate, String.t() | nil}
-          | {:auth_public, String.t() | [String.t()]}
+          | {:auth_public, String.t() | [String.t()] | nil}
           | {:log_level, String.t()}
           | {:args, [String.t()]}
           | {:on_output, (String.t() -> any()) | nil}
@@ -187,8 +189,9 @@ defmodule ExMoQ.Relay do
 
     auth =
       case Keyword.get(opts, :auth_public, "**") do
-        list when is_list(list) -> Enum.join(list, ",")
-        string -> string
+        nil -> []
+        list when is_list(list) -> ["--auth-public", Enum.join(list, ",")]
+        string -> ["--auth-public", string]
       end
 
     tls =
@@ -204,7 +207,7 @@ defmodule ExMoQ.Relay do
       listen.("--web-http-listen", Keyword.get(opts, :web)) ++
       listen.("--internal-listen", Keyword.get(opts, :internal)) ++
       tls ++
-      ["--auth-public", auth] ++
+      auth ++
       Keyword.get(opts, :args, [])
   end
 

@@ -94,6 +94,22 @@ defmodule ExMoQ.RelayTest do
       assert Relay.args(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1) ==
                ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
     end
+
+    test "auth_public: nil grants nothing, leaving auth to extra args" do
+      assert Relay.args(
+               quic: nil,
+               tcp: 1,
+               auth_public: nil,
+               args: ["--auth-public-subscribe", "anon/**"]
+             ) == [
+               "--log-level",
+               "warn",
+               "--listen-tcp-bind",
+               "127.0.0.1:1",
+               "--auth-public-subscribe",
+               "anon/**"
+             ]
+    end
   end
 
   describe "find_binary/1" do
