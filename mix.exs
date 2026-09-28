@@ -39,7 +39,8 @@ defmodule ExMoQ.Relay.MixProject do
   end
 
   defp dialyzer do
-    opts = [flags: [:error_handling]]
+    # `ExMoQ.Test.Relay` calls into ExUnit.
+    opts = [flags: [:error_handling], plt_add_apps: [:ex_unit]]
 
     if System.get_env("CI") == "true" do
       # Store PLTs in cacheable directory for CI

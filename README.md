@@ -46,6 +46,9 @@ listener (else the web one, else the TCP one) and returns `{:error, reason}`
 with the relay's first output lines otherwise. The options and caveats are
 documented in `ExMoQ.Relay`.
 
+In ExUnit, `ExMoQ.Test.Relay.start_supervised!/1` runs a relay for the current
+test; add the package with `only: :test` for that.
+
 ## Tests
 
 ```
