@@ -132,7 +132,9 @@ defmodule ExMoQ.RelayTest do
     test "a relay that exits before it is ready", %{tmp_dir: dir} do
       path = script!(dir, "failing", @fake_failing)
 
-      assert {:error, {:exited, 1, ["Error: cannot bind"]}} =
+      # The status is usually 1, but a process this quick to exit can be
+      # reported as a port error such as :epipe instead.
+      assert {:error, {:exited, _status, ["Error: cannot bind"]}} =
                Relay.start_link(binary: path, log_output: nil)
     end
 
