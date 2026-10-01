@@ -3,11 +3,9 @@ defmodule ExMoQ.Test.RelayTest do
 
   alias ExMoQ.Test.Relay
 
-  @moduletag :tmp_dir
-
-  test "raises without a relay binary", %{tmp_dir: dir} do
+  test "raises without a relay binary" do
     assert_raise ArgumentError, ~r/no moq-relay binary/, fn ->
-      Relay.start_supervised!(Path.join(dir, "missing"))
+      Relay.start_supervised!("/nonexistent/moq-relay")
     end
   end
 

@@ -3,7 +3,6 @@ defmodule ExMoQ.Relay.ConfigTest do
 
   alias ExMoQ.Relay.Config
 
-  # Any executable will do where the relay is not run.
   defp config!(opts), do: Config.new!([binary: "/bin/sh"] ++ opts)
 
   test "every :auto listener gets a port, and the rest are kept" do
