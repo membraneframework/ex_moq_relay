@@ -1,6 +1,7 @@
 defmodule ExMoQ.Test.RelayTest do
   use ExUnit.Case
 
+  alias ExMoQ.Relay.Info
   alias ExMoQ.Test.Relay
 
   test "raises without a relay binary" do
@@ -10,13 +11,20 @@ defmodule ExMoQ.Test.RelayTest do
   end
 
   @tag :integration
-  test "runs a TCP relay for the test and stops it on request" do
-    relay = Relay.start_supervised!()
-    assert %Relay{url: "tcp://127.0.0.1:" <> port, disable_tls_verify?: false} = relay
+  test "runs a TCP relay for the test" do
+    assert %Info{tcp_url: "tcp://127.0.0.1:" <> port, quic_url: nil, tls: nil} =
+             Relay.start_supervised!()
 
     {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", String.to_integer(port), [:binary])
     :gen_tcp.close(socket)
+  end
 
-    assert :ok = Relay.stop_supervised!(relay)
+  @tag :integration
+  test "its options run a relay the test can stop" do
+    relay = start_supervised!({ExMoQ.Relay, Relay.options()}, id: :relay)
+    assert %Info{tcp_url: "tcp://" <> _address} = ExMoQ.Relay.info(relay)
+
+    assert :ok = stop_supervised!(:relay)
+    refute Process.alive?(relay)
   end
 end

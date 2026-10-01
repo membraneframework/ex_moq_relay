@@ -2,46 +2,36 @@ defmodule ExMoQ.Test.Relay do
   @moduledoc """
   A relay for ExUnit tests, reached over TCP and stopped with the test.
 
-      relay = ExMoQ.Test.Relay.start_supervised!()
-      {:ok, session} = ExMoQ.Native.create_session(relay.url, self(), relay.disable_tls_verify?)
+      %ExMoQ.Relay.Info{tcp_url: url} = ExMoQ.Test.Relay.start_supervised!()
+
+  To stop it before the test ends, start it with ExUnit directly:
+
+      relay = start_supervised!({ExMoQ.Relay, ExMoQ.Test.Relay.options()}, id: :relay)
+      ExMoQ.Relay.info(relay).tcp_url
+      stop_supervised!(:relay)
   """
-
-  alias ExMoQ.Relay.Config
-
-  @enforce_keys [:url, :disable_tls_verify?, :id]
-  defstruct @enforce_keys
-
-  @type t :: %__MODULE__{url: String.t(), disable_tls_verify?: boolean(), id: term()}
 
   @doc """
-  Starts a relay under the test supervisor and blocks until it accepts
-  connections. `binary` is resolved with `find_binary/1`.
-
-  Raises if there is no binary, or the relay exits or is not ready in time.
+  The options of a test relay: TCP only, on a port the relay picks, with its
+  output logged at `:debug`. `binary` is resolved with `find_binary/1`.
   """
-  @spec start_supervised!(Path.t() | nil) :: t()
-  def start_supervised!(binary \\ nil) do
-    config =
-      Config.new!(
-        binary: binary,
-        tcp: :auto,
-        quic: nil,
-        internal: nil,
-        log_level: "info",
-        output: :debug
-      )
-
-    %{id: id} = spec = Supervisor.child_spec({ExMoQ.Relay, config}, restart: :temporary)
-    ExUnit.Callbacks.start_supervised!(spec)
-    %__MODULE__{url: ExMoQ.Relay.tcp_url(config), disable_tls_verify?: false, id: id}
+  @spec options(Path.t() | nil) :: ExMoQ.Relay.t()
+  def options(binary \\ nil) do
+    %ExMoQ.Relay{binary: binary, tcp: :auto, quic: nil, log_level: "info", output: :debug}
   end
 
   @doc """
-  Stops a relay started with `start_supervised!/1`, blocking until it is down.
+  Starts a relay with `options/1` under the test supervisor and blocks until
+  it is ready.
+
+  Raises if there is no binary, or the relay exits or is not ready in time.
   """
-  @spec stop_supervised!(t()) :: :ok
-  def stop_supervised!(%__MODULE__{id: id}),
-    do: ExUnit.Callbacks.stop_supervised!(id)
+  @spec start_supervised!(Path.t() | nil) :: ExMoQ.Relay.Info.t()
+  def start_supervised!(binary \\ nil) do
+    {ExMoQ.Relay, options(binary)}
+    |> ExUnit.Callbacks.start_supervised!(restart: :temporary)
+    |> ExMoQ.Relay.info()
+  end
 
   @doc "See `ExMoQ.Relay.find_binary/1`."
   @spec find_binary(Path.t() | nil) :: Path.t() | nil

@@ -18,19 +18,19 @@ end
 ```
 
 It runs moq-relay 0.15.0 or later, installed with `cargo install moq-relay`
-or from a [release](https://github.com/moq-dev/moq/releases);
+or from a [release](https://github.com/moq-dev/moq/releases).
 
 ## Usage
 
 ```elixir
-config = ExMoQ.Relay.Config.new!(tcp: :auto, web: :auto)
-{:ok, relay} = ExMoQ.Relay.start_link(config)
-ExMoQ.Relay.tcp_url(config)  #=> "tcp://127.0.0.1:54321"
-ExMoQ.Relay.web_url(config)  #=> "http://127.0.0.1:54322"
+{:ok, relay} = ExMoQ.Relay.start_link(%ExMoQ.Relay{tcp: :auto, web: :auto})
+%ExMoQ.Relay.Info{tcp_url: tcp_url, web_url: web_url} = ExMoQ.Relay.info(relay)
+tcp_url  #=> "tcp://127.0.0.1:54321"
+web_url  #=> "http://127.0.0.1:54322"
 ExMoQ.Relay.stop(relay)
 ```
 
-For available options, see `ExMoQ.Relay.Config`.
+For available options, see `ExMoQ.Relay`.
 
 ## Copyright and License
 

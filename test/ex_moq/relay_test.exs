@@ -4,20 +4,25 @@ defmodule ExMoQ.RelayTest do
   import ExUnit.CaptureLog
 
   alias ExMoQ.Relay
-  alias ExMoQ.Relay.Config
+  alias ExMoQ.Relay.Info
 
   @moduletag :tmp_dir
 
-  # A stand-in relay: prints a line and stays up until `stop` exists, then
-  # exits with status 3. It opens no socket: a test passes the port of a
-  # listener it holds (`listener/0`) as `:internal`, and the kernel accepts
-  # the readiness probe's connection on it.
+  # A stand-in relay: reports readiness, then the TCP port it "bound" for
+  # `--listen-tcp-bind 127.0.0.1:0` (after the readiness, which the logs can
+  # trail), and stays up until `stop` exists, then exits with status 3.
   defp fake_alive(stop) do
     """
-    #!/bin/sh
-    echo "fake relay starting: $*"
-    while [ ! -e "#{stop}" ]; do sleep 0.05; done
-    exit 3
+    #!/usr/bin/env elixir
+    IO.puts("fake relay starting: " <> Enum.join(System.argv(), " "))
+    IO.puts("RUST_LOG=" <> System.get_env("RUST_LOG", ""))
+    {:ok, socket} = :gen_udp.open(0, [:local])
+    :ok = :gen_udp.send(socket, {:local, System.fetch_env!("NOTIFY_SOCKET")}, 0, "READY=1\\n")
+    Process.sleep(100)
+    IO.puts("2026-10-01T00:00:00.000000Z  INFO moq_tokio::server: listening (tcp) addr=127.0.0.1:4321")
+    IO.puts("2026-10-01T00:00:00.000000Z  WARN moq_relay::web: a warning")
+    Stream.repeatedly(fn -> Process.sleep(50) end) |> Enum.find(fn _ -> File.exists?("#{stop}") end)
+    System.halt(3)
     """
   end
 
@@ -39,108 +44,11 @@ defmodule ExMoQ.RelayTest do
     path
   end
 
-  # Any executable will do where the relay is not run.
-  defp config!(opts), do: Config.new!([binary: "/bin/sh"] ++ opts)
-
-  # A listening socket owned by the test process, closed with it.
-  defp listener() do
+  defp free_port() do
     {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
     {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
     port
-  end
-
-  describe "args/1" do
-    test "renders the listeners that are asked for" do
-      assert Relay.args(config!(quic: 4443, tcp: 4444, internal: 9101)) == [
-               "--log-level",
-               "warn",
-               "--listen",
-               "127.0.0.1:4443",
-               "--listen-tcp-bind",
-               "127.0.0.1:4444",
-               "--internal-listen",
-               "127.0.0.1:9101",
-               "--listen-tls-generate",
-               "localhost",
-               "--auth-public",
-               "**"
-             ]
-    end
-
-    test "a TCP-only relay needs no certificate; patterns and extra args pass through" do
-      assert Relay.args(
-               config!(
-                 quic: nil,
-                 tcp: 1,
-                 internal: nil,
-                 log_level: "info",
-                 auth_public: ["anon/**", "demo/**"],
-                 args: ["--stats-enabled"]
-               )
-             ) == [
-               "--log-level",
-               "info",
-               "--listen-tcp-bind",
-               "127.0.0.1:1",
-               "--auth-public",
-               "anon/**,demo/**",
-               "--stats-enabled"
-             ]
-    end
-
-    test "every listener binds to :ip, and the web one may share the QUIC port" do
-      assert Relay.args(config!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443, internal: nil)) == [
-               "--log-level",
-               "warn",
-               "--listen",
-               "0.0.0.0:4443",
-               "--web-http-listen",
-               "0.0.0.0:4443",
-               "--listen-tls-generate",
-               "localhost",
-               "--auth-public",
-               "**"
-             ]
-
-      assert Relay.args(config!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1, internal: nil)) ==
-               ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
-    end
-
-    test "auth_public: nil grants nothing, leaving auth to extra args" do
-      assert Relay.args(
-               config!(
-                 quic: nil,
-                 tcp: 1,
-                 internal: nil,
-                 auth_public: nil,
-                 args: ["--auth-public-subscribe", "anon/**"]
-               )
-             ) == [
-               "--log-level",
-               "warn",
-               "--listen-tcp-bind",
-               "127.0.0.1:1",
-               "--auth-public-subscribe",
-               "anon/**"
-             ]
-    end
-
-    test "the QUIC listener carries the host of its generated certificate, or none" do
-      assert Relay.args(config!(quic: {4443, tls_generate: "relay.test"}, internal: nil)) ==
-               [
-                 "--log-level",
-                 "warn",
-                 "--listen",
-                 "127.0.0.1:4443",
-                 "--listen-tls-generate",
-                 "relay.test",
-                 "--auth-public",
-                 "**"
-               ]
-
-      assert Relay.args(config!(quic: {4443, tls_generate: nil}, internal: nil)) ==
-               ["--log-level", "warn", "--listen", "127.0.0.1:4443", "--auth-public", "**"]
-    end
   end
 
   describe "find_binary/1" do
@@ -154,61 +62,79 @@ defmodule ExMoQ.RelayTest do
   describe "start_link/1" do
     test "a relay that exits before it is ready reports its exit and logs its output",
          %{tmp_dir: dir} do
-      config = Config.new!(binary: script!(dir, "failing", @fake_failing))
+      options = %Relay{binary: script!(dir, "failing", @fake_failing)}
 
       log =
         capture_log(fn ->
-          assert {:error, {{:exited, {:exit_status, 1}}, _child}} =
-                   start_supervised({Relay, config})
+          assert {:error, {{:exit_status, 1}, _child}} =
+                   start_supervised({Relay, options})
         end)
 
       assert log =~ "moq-relay: Error: cannot bind"
     end
 
-    test "a relay that never accepts connections is stopped", %{tmp_dir: dir} do
-      path = script!(dir, "silent", @fake_silent)
-      config = Config.new!(binary: path, ready_timeout: 300)
+    test "start/1 returns the exit of a relay that exits before it is ready, and its output",
+         %{tmp_dir: dir} do
+      me = self()
 
-      assert {:error, {:not_ready, 300}} = Relay.start_link(config)
+      options =
+        %Relay{
+          binary: script!(dir, "failing", @fake_failing),
+          output: &send(me, {:line, &1})
+        }
+
+      assert {:error, {:exit_status, 1}} = Relay.start(options)
+      assert_received {:line, "Error: cannot bind"}
     end
 
-    test "a ready relay runs with the config's ports, and exits with its status",
+    test "a relay that never reports readiness is stopped", %{tmp_dir: dir} do
+      path = script!(dir, "silent", @fake_silent)
+      options = %Relay{binary: path, ready_timeout: 300}
+
+      assert {:error, {:not_ready, 300}} = Relay.start_link(options)
+    end
+
+    test "a ready relay reports the ports it bound, and exits with its status",
          %{tmp_dir: dir} do
       stop = Path.join(dir, "stop")
       me = self()
 
-      config =
-        Config.new!(
+      options =
+        %Relay{
           binary: script!(dir, "alive", fake_alive(stop)),
+          quic: nil,
           tcp: :auto,
-          internal: listener(),
           output: &send(me, {:line, &1})
-        )
+        }
 
-      relay = start_supervised!(Supervisor.child_spec({Relay, config}, restart: :temporary))
-      {quic, _tls} = config.quic
+      relay = start_supervised!(Supervisor.child_spec({Relay, options}, restart: :temporary))
 
-      assert_receive {:line, line}, 2_000
-      assert line == "fake relay starting: " <> Enum.join(Relay.args(config), " ")
-      assert Relay.quic_url(config) == "https://127.0.0.1:#{quic}"
-      assert Relay.tcp_url(config) == "tcp://127.0.0.1:#{config.tcp}"
-      assert Relay.internal_url(config) == "http://127.0.0.1:#{config.internal}"
-      assert Relay.web_url(config) == nil
+      assert %Info{tcp_url: "tcp://127.0.0.1:4321", quic_url: nil} = Relay.info(relay)
+      assert_received {:line, "fake relay starting: " <> args}
+      assert args == Enum.join(Relay.args(options), " ")
+
+      # The info line with the port is asked for, but is below `"warn"`.
+      assert_received {:line,
+                       "RUST_LOG=warn,moq_relay::relay=info,moq_relay::web=info,moq_tokio::server=info"}
+
+      assert_receive {:line, "2026-10-01T00:00:00.000000Z  WARN moq_relay::web: a warning"}
+      refute_received {:line, "2026-10-01T00:00:00.000000Z  INFO" <> _line}
 
       ref = Process.monitor(relay)
       File.touch!(stop)
-      assert_receive {:DOWN, ^ref, :process, ^relay, {:exit_status, 3}}, 2_000
+      assert_receive {:DOWN, ^ref, :process, ^relay, {:exit_status, 3}}, 5_000
     end
 
     test ":name registers the relay's process", %{tmp_dir: dir} do
-      config =
-        Config.new!(
+      options =
+        %Relay{
           binary: script!(dir, "alive", fake_alive(Path.join(dir, "stop"))),
-          internal: listener(),
+          quic: nil,
+          tcp: :auto,
           name: __MODULE__.Named
-        )
+        }
 
-      {:ok, relay} = Relay.start_link(config)
+      {:ok, relay} = Relay.start_link(options)
       assert Process.whereis(__MODULE__.Named) == relay
       assert :ok = Relay.stop(__MODULE__.Named)
     end
@@ -221,25 +147,39 @@ defmodule ExMoQ.RelayTest do
       assert {:ok, version} = Relay.version()
       assert version =~ ~r/^\d+\.\d+\.\d+/
 
-      config = Config.new!(tcp: :auto, web: :auto, output: nil)
-      {:ok, relay} = Relay.start_link(config)
+      internal = free_port()
+      options = %Relay{tcp: :auto, web: :auto, internal: internal, output: nil}
+      {:ok, relay} = Relay.start_link(options)
 
-      assert {200, _body} = get(config.internal, "/health")
-      assert {200, _body} = get(config.web, "/health")
+      info = Relay.info(relay)
+      assert info.internal_url == "http://127.0.0.1:#{internal}"
+      assert %URI{scheme: "https", port: quic} = URI.parse(info.quic_url)
+      assert %URI{scheme: "tcp", port: tcp} = URI.parse(info.tcp_url)
+      assert quic in 1..65_535
+      assert info.tls == :generated
+
+      assert {200, _body} = get(info.internal_url <> "/health")
+      assert {200, _body} = get(info.web_url <> "/health")
       # The SHA-256 of the generated certificate, hex-encoded.
-      assert {200, fingerprint} = get(config.web, "/certificate.sha256")
+      assert {200, fingerprint} = get(info.web_url <> "/certificate.sha256")
       assert String.trim(fingerprint) =~ ~r/^[0-9a-f]{64}$/
+
+      {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", tcp, [:binary])
+      :gen_tcp.close(socket)
 
       assert :ok = Relay.stop(relay)
       refute Process.alive?(relay)
     end
+
+    test "a relay that binds its listeners but cannot authenticate is not ready" do
+      options = %Relay{tcp: :auto, auth_public: nil, output: nil}
+      assert {:error, {:exit_status, 1}} = Relay.start(options)
+    end
   end
 
-  defp get(port, path) do
-    url = ~c"http://127.0.0.1:#{port}#{path}"
-
+  defp get(url) do
     {:ok, {{_version, status, _reason}, _headers, body}} =
-      :httpc.request(:get, {url, []}, [timeout: 2_000], body_format: :binary)
+      :httpc.request(:get, {String.to_charlist(url), []}, [timeout: 2_000], body_format: :binary)
 
     {status, body}
   end

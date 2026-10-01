@@ -1,26 +1,105 @@
 defmodule ExMoQ.Relay do
   @moduledoc """
   Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS
-  process, configured with `ExMoQ.Relay.Config`.
+  process.
+
+  The struct holds the options of a relay to start:
+
+      {:ok, relay} = ExMoQ.Relay.start_link(%ExMoQ.Relay{tcp: :auto})
+      ExMoQ.Relay.info(relay).tcp_url  #=> "tcp://127.0.0.1:54321"
 
   The process returned by `start_link/1` owns the relay: the relay stops with
   it, and it exits with `{:exit_status, status}` when the relay exits with a
   non-zero status. Under a supervisor, the `:restart` setting decides what
   happens then:
 
-      {ExMoQ.Relay, ExMoQ.Relay.Config.new!(quic: 4443, web: 4443, name: MyApp.Relay)}
+      {ExMoQ.Relay, %ExMoQ.Relay{quic: 4443, web: 4443, name: MyApp.Relay}}
+
+  Starting returns once the relay's listeners are bound and it accepts
+  sessions. The ports it picked for `:auto` are in `info/1`.
+
+  ## Options
+
+    * `:binary` - path to the relay; see `find_binary/1` for the default.
+    * `:ip` - the address the listeners bind to (default `{127, 0, 0, 1}`).
+    * `:quic` - the QUIC listener: `:auto` (default), a port, or `nil`. Its
+      certificate is generated for `"localhost"`; `{port, tls_generate: host}`
+      names another host, and `{port, tls_generate: nil}` generates none, for
+      one passed in `:args`.
+    * `:tcp` - a plaintext TCP listener: `:auto`, a port, or `nil` (default).
+    * `:web` - the HTTP listener serving `/health`, `/certificate.sha256`,
+      `/fetch` and WebSocket: `:auto`, a port, or `nil` (default). It may
+      share its port number with `:quic`.
+    * `:internal` - the HTTP listener serving `/health`, `/metrics` and
+      `/sessions`: a port or `nil` (default). It cannot be `:auto`.
+    * `:auth_public` - path patterns anonymous sessions may publish and
+      subscribe to, a string or a list (default `"**"`, everything); `nil`
+      for none.
+    * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
+      `"info"`, `"debug"` or `"trace"`.
+    * `:args` - extra command-line arguments.
+    * `:output` - where the relay's output lines go: a `Logger` level to log
+      them at (default `:info`), a 1-arity function to call with each, or
+      `nil` to drop them.
+    * `:ready_timeout` - milliseconds to wait for readiness (default 15 000).
+    * `:name` - a name to register the relay's process under (default `nil`).
   """
 
-  alias ExMoQ.Relay.Config
+  use GenServer
 
-  @probe_interval_ms 100
+  require Logger
+
+  alias ExMoQ.Relay.Info
+
+  @log_levels ["error", "warn", "info", "debug", "trace"]
+  @listening_targets ["moq_relay::relay", "moq_relay::web", "moq_tokio::server"]
+
+  @typedoc "A listener port: `:auto` until the relay binds it."
+  @type port_option :: :auto | :inet.port_number() | nil
+
+  @typedoc "The QUIC listener, see `:quic`."
+  @type quic_option :: port_option() | {:auto | :inet.port_number(), quic_listener_opts()}
+
+  @typedoc "Options of the QUIC listener, for `{port, opts}` in `:quic`."
+  @type quic_listener_opts :: [{:tls_generate, String.t() | nil}]
+
+  @typedoc "Where the relay's output lines go."
+  @type output :: Logger.level() | (String.t() -> any()) | nil
+
+  @type t :: %__MODULE__{
+          binary: Path.t() | nil,
+          ip: :inet.ip_address(),
+          quic: quic_option(),
+          tcp: port_option(),
+          web: port_option(),
+          internal: :inet.port_number() | nil,
+          auth_public: String.t() | [String.t()] | nil,
+          log_level: String.t(),
+          args: [String.t()],
+          output: output(),
+          ready_timeout: non_neg_integer(),
+          name: GenServer.name() | nil
+        }
+
+  defstruct binary: nil,
+            ip: {127, 0, 0, 1},
+            quic: :auto,
+            tcp: nil,
+            web: nil,
+            internal: nil,
+            auth_public: "**",
+            log_level: "warn",
+            args: [],
+            output: :info,
+            ready_timeout: 15_000,
+            name: nil
 
   @typedoc """
-  Why the relay did not start: it exited (with the reason its process exited
-  with), or it did not accept connections within the given milliseconds.
+  Why the relay did not start: it exited with the given status, or it did
+  not report readiness within the given milliseconds.
   """
   @type start_error ::
-          {:exited, reason :: term()}
+          {:exit_status, non_neg_integer()}
           | {:not_ready, timeout_ms :: non_neg_integer()}
 
   @typedoc "Why `version/1` could not read the relay's version."
@@ -30,33 +109,44 @@ defmodule ExMoQ.Relay do
           | {:unexpected_output, term()}
 
   @doc """
-  A child spec for the relay. Relays on different ports can share a
-  supervisor without explicit ids.
+  A child spec for the relay. Relays can share a supervisor without explicit
+  ids. Raises like `start_link/1`, in the caller rather than the supervisor.
   """
-  @spec child_spec(Config.t()) :: Supervisor.child_spec()
-  def child_spec(%Config{} = config) do
+  @spec child_spec(t()) :: Supervisor.child_spec()
+  def child_spec(%__MODULE__{} = options) do
     %{
-      id: {__MODULE__, quic_port(config), config.tcp},
-      start: {__MODULE__, :start_link, [config]},
+      id: {__MODULE__, options.name || make_ref()},
+      start: {__MODULE__, :start_link, [validate!(options)]},
       type: :worker
     }
   end
 
   @doc """
-  Starts a relay linked to the caller and blocks until it accepts
-  connections.
+  Starts a relay linked to the caller and blocks until it is ready.
 
-  If the relay exits before it is ready, a caller that does not trap exits
-  exits with it, as with `GenServer.start_link/3`.
+  Raises `ArgumentError` when the relay binary is not found or the options
+  are ones the relay cannot run with.
+
+  A relay that exits with a non-zero status before it is ready exits the
+  caller with `{:exit_status, status}` unless the caller traps exits, as
+  with `GenServer.start_link/3`; `start/1` returns that error instead.
   """
-  @spec start_link(Config.t()) ::
-          {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  def start_link(%Config{} = config) do
-    with {:ok, daemon} <-
-           MuonTrap.Daemon.start_link(config.binary, args(config), daemon_opts(config)) do
-      await_ready(daemon, config)
-    end
-  end
+  @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start_link(%__MODULE__{} = options),
+    do: GenServer.start_link(__MODULE__, validate!(options), name: options.name)
+
+  @doc "Starts a relay not linked to the caller; see `start_link/1`."
+  @spec start(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start(%__MODULE__{} = options),
+    do: GenServer.start(__MODULE__, validate!(options), name: options.name)
+
+  @doc "What the relay reports: where its listeners are reached."
+  @spec info(GenServer.server()) :: Info.t()
+  def info(relay), do: GenServer.call(relay, :info)
+
+  @doc "Stops the relay."
+  @spec stop(GenServer.server(), timeout()) :: :ok
+  def stop(relay, timeout \\ 5_000), do: GenServer.stop(relay, :normal, timeout)
 
   @doc """
   Finds the relay binary: `binary` if given, else `$MOQ_RELAY`, else
@@ -81,152 +171,310 @@ defmodule ExMoQ.Relay do
     end
   end
 
-  @doc "The arguments the relay binary is run with."
-  @spec args(Config.t()) :: [String.t()]
-  def args(%Config{} = config) do
+  @doc """
+  The arguments the relay binary is run with; `:auto` ports are port 0.
+  Raises like `start_link/1`.
+  """
+  @spec args(t()) :: [String.t()]
+  def args(%__MODULE__{} = options) do
+    options = validate!(options)
+
     listen = fn
       _flag, nil -> []
-      flag, port -> [flag, address(config.ip, port)]
+      flag, :auto -> [flag, address(options.ip, 0)]
+      flag, port -> [flag, address(options.ip, port)]
     end
 
     auth =
-      case config.auth_public do
+      case options.auth_public do
         nil -> []
         list when is_list(list) -> ["--auth-public", Enum.join(list, ",")]
         string -> ["--auth-public", string]
       end
 
     tls =
-      case config.quic do
+      case options.quic do
         {_port, tls_generate: host} when host != nil -> ["--listen-tls-generate", host]
         _no_certificate -> []
       end
 
-    ["--log-level", config.log_level] ++
-      listen.("--listen", quic_port(config)) ++
-      listen.("--listen-tcp-bind", config.tcp) ++
-      listen.("--web-http-listen", config.web) ++
-      listen.("--internal-listen", config.internal) ++
+    ["--log-level", options.log_level] ++
+      listen.("--listen", quic_port(options)) ++
+      listen.("--listen-tcp-bind", options.tcp) ++
+      listen.("--web-http-listen", options.web) ++
+      listen.("--internal-listen", options.internal) ++
       tls ++
       auth ++
-      config.args
+      options.args
   end
 
-  @doc "`https://host:port` of the QUIC listener, or `nil`; append the path yourself."
-  @spec quic_url(Config.t()) :: String.t() | nil
-  def quic_url(%Config{} = config), do: url(config, "https", quic_port(config))
+  @doc false
+  @spec quic_port(t()) :: port_option()
+  def quic_port(%__MODULE__{quic: {port, _tls}}), do: port
+  def quic_port(%__MODULE__{quic: nil}), do: nil
 
-  @doc "`tcp://host:port` of the TCP listener, or `nil`."
-  @spec tcp_url(Config.t()) :: String.t() | nil
-  def tcp_url(%Config{} = config), do: url(config, "tcp", config.tcp)
+  @doc false
+  @spec address(:inet.ip_address(), :inet.port_number()) :: String.t()
+  def address(ip, port) when tuple_size(ip) == 8, do: "[#{:inet.ntoa(ip)}]:#{port}"
+  def address(ip, port), do: "#{:inet.ntoa(ip)}:#{port}"
 
-  @doc "`http://host:port` of the web listener, or `nil`."
-  @spec web_url(Config.t()) :: String.t() | nil
-  def web_url(%Config{} = config), do: url(config, "http", config.web)
+  ## Server
 
-  @doc "`http://host:port` of the internal listener, or `nil`."
-  @spec internal_url(Config.t()) :: String.t() | nil
-  def internal_url(%Config{} = config), do: url(config, "http", config.internal)
+  @impl true
+  def init(%__MODULE__{} = options) do
+    deadline = System.monotonic_time(:millisecond) + options.ready_timeout
+    path = notify_path()
+    File.rm(path)
+    {:ok, notify} = :gen_udp.open(0, [:local, :binary, active: true, ifaddr: {:local, path}])
 
-  @doc "Stops the relay."
-  @spec stop(GenServer.server(), timeout()) :: :ok
-  def stop(relay, timeout \\ 5_000), do: GenServer.stop(relay, :normal, timeout)
+    daemon_opts = [
+      stderr_to_stdout: true,
+      exit_status_to_reason: &{:exit_status, &1},
+      logger_fun: logger_fun(options, self()),
+      env: env(options, path)
+    ]
+
+    {:ok, daemon} = MuonTrap.Daemon.start_link(options.binary, args(options), daemon_opts)
+    state = %{options: options, daemon: daemon, monitor: Process.monitor(daemon)}
+    result = await_ready(state, notify, false, deadline)
+    :ok = :gen_udp.close(notify)
+    File.rm(path)
+
+    case result do
+      {:ok, %{options: options} = state} ->
+        {:ok, %{daemon: state.daemon, monitor: state.monitor, info: Info.new(options)}}
+
+      {:error, {:not_ready, _timeout_ms}} = error ->
+        stop_daemon(daemon)
+        error
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @impl true
+  def handle_call(:info, _from, state), do: {:reply, state.info, state}
+
+  @impl true
+  def handle_info({:listening, _listener, _port}, state), do: {:noreply, state}
+
+  # The link takes the relay down when the daemon exits abnormally; this
+  # covers a relay that exits with status 0, whose `:normal` exit the link
+  # ignores.
+  def handle_info({:DOWN, monitor, :process, _daemon, reason}, %{monitor: monitor} = state),
+    do: {:stop, reason, %{state | daemon: nil}}
+
+  @impl true
+  def terminate(_reason, %{daemon: nil}), do: :ok
+  def terminate(_reason, %{daemon: daemon}), do: stop_daemon(daemon)
+
+  ## Validating
+
+  @spec validate!(t()) :: t()
+  defp validate!(%__MODULE__{} = options) do
+    binary = binary!(options.binary)
+    output!(options.output)
+    log_level!(options.log_level)
+    quic = quic!(options.quic)
+    Enum.each([:tcp, :web], &port!(&1, Map.fetch!(options, &1)))
+    internal!(options.internal)
+
+    if quic == nil and options.tcp == nil,
+      do: raise(ArgumentError, "a relay needs a :quic or a :tcp listener, both are nil")
+
+    %__MODULE__{options | binary: binary, quic: quic}
+  end
+
+  @spec binary!(Path.t() | nil) :: Path.t()
+  defp binary!(binary) do
+    find_binary(binary) ||
+      raise ArgumentError, "no moq-relay binary found; see ExMoQ.Relay.find_binary/1"
+  end
+
+  @spec output!(term()) :: :ok
+  defp output!(output) when output == nil or is_function(output, 1), do: :ok
+
+  defp output!(level) do
+    if level not in Logger.levels(),
+      do:
+        raise(
+          ArgumentError,
+          ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(level)}"
+        )
+
+    :ok
+  end
+
+  @spec log_level!(term()) :: :ok
+  defp log_level!(level) when level in @log_levels, do: :ok
+
+  defp log_level!(other),
+    do:
+      raise(
+        ArgumentError,
+        ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
+      )
+
+  @spec quic!(term()) :: {:auto | :inet.port_number(), quic_listener_opts()} | nil
+  defp quic!(nil), do: nil
+
+  defp quic!({port, opts}) when is_list(opts) do
+    if port == nil, do: raise(ArgumentError, "a :quic listener needs a port or :auto, got: nil")
+    port!(:quic, port)
+    {port, Keyword.validate!(opts, tls_generate: "localhost")}
+  end
+
+  defp quic!(port), do: quic!({port, []})
+
+  @spec internal!(term()) :: :ok
+  defp internal!(:auto),
+    do:
+      raise(
+        ArgumentError,
+        ":internal must be a port or nil: the relay does not report the port it binds for :auto"
+      )
+
+  defp internal!(port), do: port!(:internal, port)
+
+  @spec port!(atom(), term()) :: :ok
+  defp port!(_key, value) when value in [nil, :auto], do: :ok
+  defp port!(_key, port) when port in 1..65_535, do: :ok
+
+  defp port!(key, other),
+    do:
+      raise(ArgumentError, "#{inspect(key)} must be :auto, a port or nil, got: #{inspect(other)}")
 
   ## Starting
 
-  @spec daemon_opts(Config.t()) :: keyword()
-  defp daemon_opts(config) do
-    output =
-      case config.output do
-        nil -> [logger_fun: fn _line -> :ok end]
-        fun when is_function(fun, 1) -> [logger_fun: fun]
-        level -> [log_output: level, log_prefix: "moq-relay: "]
+  @spec notify_path() :: Path.t()
+  defp notify_path() do
+    name = "moq-relay-#{System.pid()}-#{System.unique_integer([:positive])}.sock"
+    Path.join(System.tmp_dir!(), name)
+  end
+
+  # `RUST_LOG` overrides `--log-level`, so it can lift just the targets that
+  # log the bound addresses to info; the lines below the asked-for level are
+  # then dropped in `logger_fun/2`.
+  @spec env(t(), Path.t()) :: [{String.t(), String.t()}]
+  defp env(options, notify_path) do
+    rust_log =
+      if raise_level?(options) do
+        directives = Enum.map(@listening_targets, &"#{&1}=info")
+        [{"RUST_LOG", Enum.join([options.log_level | directives], ",")}]
+      else
+        []
       end
 
-    name = if config.name, do: [name: config.name], else: []
-
-    [stderr_to_stdout: true, exit_status_to_reason: &{:exit_status, &1}] ++ output ++ name
+    [{"NOTIFY_SOCKET", notify_path}, {"NO_COLOR", "1"}] ++ rust_log
   end
 
-  @spec await_ready(pid(), Config.t()) :: {:ok, pid()} | {:error, start_error()}
-  defp await_ready(daemon, %Config{ready: :none}), do: {:ok, daemon}
+  @spec raise_level?(t()) :: boolean()
+  defp raise_level?(options),
+    do: not resolved?(options) and level_index(options.log_level) < level_index("info")
 
-  defp await_ready(daemon, %Config{ready: listener} = config) do
-    ref = Process.monitor(daemon)
-    deadline = System.monotonic_time(:millisecond) + config.ready_timeout
+  @spec await_ready(map(), :gen_udp.socket(), boolean(), integer()) ::
+          {:ok, map()} | {:error, start_error() | term()}
+  defp await_ready(state, notify, notified?, deadline) do
+    if notified? and resolved?(state.options) do
+      {:ok, state}
+    else
+      monitor = state.monitor
+      timeout = max(deadline - System.monotonic_time(:millisecond), 0)
 
-    case poll(config, Map.fetch!(config, listener), ref, deadline) do
-      :ok ->
-        Process.demonitor(ref, [:flush])
-        {:ok, daemon}
+      receive do
+        {:udp, ^notify, _address, _port, message} ->
+          ready? = "READY=1" in String.split(message, "\n")
+          await_ready(state, notify, notified? or ready?, deadline)
 
-      {:error, {:not_ready, _timeout_ms}} = error ->
-        Process.demonitor(ref, [:flush])
-        stop(daemon)
-        error
+        {:listening, listener, port} ->
+          options = resolve(state.options, listener, port)
+          await_ready(%{state | options: options}, notify, notified?, deadline)
 
-      {:error, {:exited, _reason}} = error ->
-        error
+        {:DOWN, ^monitor, :process, _daemon, :normal} ->
+          {:error, {:exit_status, 0}}
+
+        {:DOWN, ^monitor, :process, _daemon, reason} ->
+          {:error, reason}
+      after
+        timeout -> {:error, {:not_ready, state.options.ready_timeout}}
+      end
     end
   end
 
-  @spec poll(Config.t(), :inet.port_number(), reference(), integer()) ::
-          :ok | {:error, start_error()}
-  defp poll(config, port, ref, deadline) do
-    receive do
-      {:DOWN, ^ref, :process, _daemon, reason} -> {:error, {:exited, reason}}
-    after
-      @probe_interval_ms ->
-        cond do
-          probe(config.ip, port) ->
-            :ok
+  @spec resolved?(t()) :: boolean()
+  defp resolved?(options), do: :auto not in [quic_port(options), options.tcp, options.web]
 
-          System.monotonic_time(:millisecond) > deadline ->
-            {:error, {:not_ready, config.ready_timeout}}
-
-          true ->
-            poll(config, port, ref, deadline)
-        end
+  @spec resolve(t(), :quic | :tcp | :web, :inet.port_number()) :: t()
+  defp resolve(options, listener, port) do
+    case {listener, options} do
+      {:quic, %__MODULE__{quic: {:auto, tls}}} -> %__MODULE__{options | quic: {port, tls}}
+      {:tcp, %__MODULE__{tcp: :auto}} -> %__MODULE__{options | tcp: port}
+      {:web, %__MODULE__{web: :auto}} -> %__MODULE__{options | web: port}
+      _other -> options
     end
   end
 
-  @spec probe(:inet.ip_address(), :inet.port_number()) :: boolean()
-  defp probe(ip, port) do
-    host = reachable(ip)
+  # Runs in the daemon's process, so the lines a relay prints as it exits are
+  # written out before the exit reaches the relay's process.
+  @spec logger_fun(t(), pid()) :: (String.t() -> :ok)
+  defp logger_fun(options, server) do
+    filter_level? = raise_level?(options)
+    resolve? = not resolved?(options)
 
-    case :gen_tcp.connect(host, port, [:binary, active: false] ++ family(host), 1_000) do
-      {:ok, socket} ->
-        :gen_tcp.close(socket)
-        true
+    fn line ->
+      if not filter_level? or within_level?(line, options.log_level), do: output(options, line)
 
-      {:error, _reason} ->
-        false
+      with true <- resolve?,
+           {listener, port} <- listening(line),
+           do: send(server, {:listening, listener, port})
+
+      :ok
     end
   end
 
-  ## Addresses
+  @spec listening(String.t()) :: {:quic | :tcp | :web, :inet.port_number()} | nil
+  defp listening(line) do
+    patterns = [
+      quic: ~r/ listening addr=\S+:(\d+) kind="quic"/,
+      web: ~r/ listening addr=\S+:(\d+) kind="http"/,
+      tcp: ~r/ listening \(tcp\) addr=\S+:(\d+)/
+    ]
 
-  @spec quic_port(Config.t()) :: :inet.port_number() | nil
-  defp quic_port(%Config{quic: {port, _tls}}), do: port
-  defp quic_port(%Config{quic: nil}), do: nil
+    Enum.find_value(patterns, fn {listener, pattern} ->
+      with [port] <- Regex.run(pattern, line, capture: :all_but_first),
+           do: {listener, String.to_integer(port)}
+    end)
+  end
 
-  @spec url(Config.t(), String.t(), :inet.port_number() | nil) :: String.t() | nil
-  defp url(_config, _scheme, nil), do: nil
-  defp url(config, scheme, port), do: "#{scheme}://#{address(reachable(config.ip), port)}"
+  @spec output(t(), String.t()) :: :ok
+  defp output(options, line) do
+    case options.output do
+      nil -> :ok
+      fun when is_function(fun, 1) -> fun.(line)
+      level -> Logger.log(level, "moq-relay: " <> line)
+    end
 
-  @spec family(:inet.ip_address()) :: [:inet6]
-  defp family(ip) when tuple_size(ip) == 8, do: [:inet6]
-  defp family(_ip), do: []
+    :ok
+  end
 
-  # Where a listener bound to `ip` is reached from this host.
-  @spec reachable(:inet.ip_address()) :: :inet.ip_address()
-  defp reachable({0, 0, 0, 0}), do: {127, 0, 0, 1}
-  defp reachable({0, 0, 0, 0, 0, 0, 0, 0}), do: {0, 0, 0, 0, 0, 0, 0, 1}
-  defp reachable(ip), do: ip
+  # Lines without a level, like the ones of an error the relay exits with,
+  # are always within it.
+  @spec within_level?(String.t(), String.t()) :: boolean()
+  defp within_level?(line, log_level) do
+    case Regex.run(~r/^\S+\s+(ERROR|WARN|INFO|DEBUG|TRACE) /, line, capture: :all_but_first) do
+      [level] -> level_index(String.downcase(level)) <= level_index(log_level)
+      nil -> true
+    end
+  end
 
-  @spec address(:inet.ip_address(), :inet.port_number()) :: String.t()
-  defp address(ip, port) when tuple_size(ip) == 8 and is_integer(port),
-    do: "[#{:inet.ntoa(ip)}]:#{port}"
+  @spec level_index(String.t()) :: non_neg_integer()
+  defp level_index(level), do: Enum.find_index(@log_levels, &(&1 == level))
 
-  defp address(ip, port) when is_integer(port), do: "#{:inet.ntoa(ip)}:#{port}"
+  @spec stop_daemon(pid()) :: :ok
+  defp stop_daemon(daemon) do
+    GenServer.stop(daemon)
+  catch
+    :exit, _reason -> :ok
+  end
 end
