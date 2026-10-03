@@ -20,6 +20,7 @@ defmodule ExMoQ.Relay.Info do
   """
 
   alias ExMoQ.Relay
+  alias ExMoQ.Relay.Options
 
   @type t :: %__MODULE__{
           quic_url: String.t() | nil,
@@ -50,9 +51,9 @@ defmodule ExMoQ.Relay.Info do
 
   @spec url(Relay.t(), String.t(), :quic | :tcp | :web | :internal) :: String.t() | nil
   defp url(options, scheme, key) do
-    case Relay.listener(options, key) do
+    case Options.listener(options, key) do
       nil -> nil
-      {port, ip} when is_integer(port) -> "#{scheme}://#{Relay.address(reachable(ip), port)}"
+      {port, ip} when is_integer(port) -> "#{scheme}://#{Options.address(reachable(ip), port)}"
     end
   end
 

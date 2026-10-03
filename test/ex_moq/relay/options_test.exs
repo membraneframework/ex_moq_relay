@@ -26,6 +26,10 @@ defmodule ExMoQ.Relay.OptionsTest do
       Relay.start(relay!(internal: {:auto, ip: {0, 0, 0, 0}}))
     end
 
+    assert_raise ArgumentError, ~r/unknown keys \[:subscibe\]/, fn ->
+      Relay.start(relay!(auth_public: [subscibe: "**"]))
+    end
+
     assert_raise ArgumentError, ~r/unknown keys \[:host\]/, fn ->
       Relay.start(relay!(web: {4443, host: "localhost"}))
     end
@@ -116,14 +120,12 @@ defmodule ExMoQ.Relay.OptionsTest do
              ]
     end
 
-    test "auth_public: nil grants nothing, leaving auth to extra args" do
+    test "anonymous sessions are granted subscribing and publishing apart" do
       assert Relay.args(
                relay!(
                  quic: nil,
                  tcp: 1,
-                 internal: nil,
-                 auth_public: nil,
-                 args: ["--auth-public-subscribe", "anon/**"]
+                 auth_public: [subscribe: ["demo/**", "live/**"], publish: "uploads/**"]
                )
              ) == [
                "--log-level",
@@ -131,7 +133,32 @@ defmodule ExMoQ.Relay.OptionsTest do
                "--listen-tcp-bind",
                "127.0.0.1:1",
                "--auth-public-subscribe",
-               "anon/**"
+               "demo/**,live/**",
+               "--auth-public-publish",
+               "uploads/**"
+             ]
+
+      assert Relay.args(relay!(quic: nil, tcp: 1, auth_public: [subscribe: "**"])) ==
+               ["--log-level", "warn", "--listen-tcp-bind", "127.0.0.1:1"] ++
+                 ["--auth-public-subscribe", "**"]
+    end
+
+    test "auth_public: nil grants nothing, leaving auth to extra args" do
+      assert Relay.args(
+               relay!(
+                 quic: nil,
+                 tcp: 1,
+                 internal: nil,
+                 auth_public: nil,
+                 args: ["--auth-url", "http://127.0.0.1:4440/"]
+               )
+             ) == [
+               "--log-level",
+               "warn",
+               "--listen-tcp-bind",
+               "127.0.0.1:1",
+               "--auth-url",
+               "http://127.0.0.1:4440/"
              ]
     end
 

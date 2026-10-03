@@ -36,7 +36,8 @@ defmodule ExMoQ.Relay do
       `/sessions`: a port or `nil` (default). It cannot be `:auto`.
     * `:auth_public` - path patterns anonymous sessions may publish and
       subscribe to, a string or a list (default `"**"`, everything); `nil`
-      for none.
+      for none. `[subscribe: patterns, publish: patterns]` grants the two
+      apart: `[subscribe: "**"]` lets anyone subscribe and no one publish.
     * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
       `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the
       environment, which the relay does not inherit.
@@ -52,10 +53,15 @@ defmodule ExMoQ.Relay do
 
   require Logger
 
-  alias ExMoQ.Relay.Info
+  alias ExMoQ.Relay.{Info, Options}
 
-  @log_levels ["error", "warn", "info", "debug", "trace"]
   @listening_targets ["moq_relay::relay", "moq_relay::web", "moq_tokio::server"]
+
+  @typedoc "Path patterns, like `\"anon/**\"`: one, or a list."
+  @type patterns :: String.t() | [String.t()]
+
+  @typedoc "What anonymous sessions are granted, see `:auth_public`."
+  @type auth_public :: patterns() | [subscribe: patterns(), publish: patterns()] | nil
 
   @typedoc "A listener port: `:auto` until the relay binds it."
   @type port_option :: :auto | :inet.port_number() | nil
@@ -82,7 +88,7 @@ defmodule ExMoQ.Relay do
           tcp: listener_option(),
           web: listener_option(),
           internal: :inet.port_number() | {:inet.port_number(), listener_opts()} | nil,
-          auth_public: String.t() | [String.t()] | nil,
+          auth_public: auth_public(),
           log_level: String.t(),
           args: [String.t()],
           output: output(),
@@ -125,7 +131,7 @@ defmodule ExMoQ.Relay do
   def child_spec(%__MODULE__{} = options) do
     %{
       id: {__MODULE__, options.name || make_ref()},
-      start: {__MODULE__, :start_link, [validate!(options)]},
+      start: {__MODULE__, :start_link, [Options.validate!(options)]},
       type: :worker
     }
   end
@@ -138,12 +144,12 @@ defmodule ExMoQ.Relay do
   """
   @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start_link(%__MODULE__{} = options),
-    do: GenServer.start_link(__MODULE__, validate!(options), name: options.name)
+    do: GenServer.start_link(__MODULE__, Options.validate!(options), name: options.name)
 
   @doc "Starts a relay not linked to the caller; see `start_link/1`."
   @spec start(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start(%__MODULE__{} = options),
-    do: GenServer.start(__MODULE__, validate!(options), name: options.name)
+    do: GenServer.start(__MODULE__, Options.validate!(options), name: options.name)
 
   @doc "What the relay reports: where its listeners are reached."
   @spec info(GenServer.server()) :: Info.t()
@@ -183,57 +189,7 @@ defmodule ExMoQ.Relay do
   Raises like `start_link/1`.
   """
   @spec args(t()) :: [String.t()]
-  def args(%__MODULE__{} = options) do
-    options = validate!(options)
-
-    listen = fn flag, key ->
-      case listener(options, key) do
-        nil -> []
-        {:auto, ip} -> [flag, address(ip, 0)]
-        {port, ip} -> [flag, address(ip, port)]
-      end
-    end
-
-    auth =
-      case options.auth_public do
-        nil -> []
-        list when is_list(list) -> ["--auth-public", Enum.join(list, ",")]
-        string -> ["--auth-public", string]
-      end
-
-    tls =
-      with {_port, opts} <- options.quic,
-           host when host != nil <- opts[:tls_generate] do
-        ["--listen-tls-generate", host]
-      else
-        _no_certificate -> []
-      end
-
-    ["--log-level", options.log_level] ++
-      listen.("--listen", :quic) ++
-      listen.("--listen-tcp-bind", :tcp) ++
-      listen.("--web-http-listen", :web) ++
-      listen.("--internal-listen", :internal) ++
-      tls ++
-      auth ++
-      options.args
-  end
-
-  @doc false
-  @spec listener(t(), :quic | :tcp | :web | :internal) ::
-          {:auto | :inet.port_number(), :inet.ip_address()} | nil
-  def listener(%__MODULE__{} = options, key) do
-    case Map.fetch!(options, key) do
-      nil -> nil
-      {port, opts} -> {port, Keyword.get(opts, :ip, options.ip)}
-      port -> {port, options.ip}
-    end
-  end
-
-  @doc false
-  @spec address(:inet.ip_address(), :inet.port_number()) :: String.t()
-  def address(ip, port) when tuple_size(ip) == 8, do: "[#{:inet.ntoa(ip)}]:#{port}"
-  def address(ip, port), do: "#{:inet.ntoa(ip)}:#{port}"
+  defdelegate args(options), to: Options
 
   ## Server
 
@@ -251,7 +207,7 @@ defmodule ExMoQ.Relay do
       env: env(options, path)
     ]
 
-    {:ok, daemon} = MuonTrap.Daemon.start_link(options.binary, args(options), daemon_opts)
+    {:ok, daemon} = MuonTrap.Daemon.start_link(options.binary, Options.args(options), daemon_opts)
     state = %{options: options, daemon: daemon, monitor: Process.monitor(daemon)}
     result = await_ready(state, notify, false, deadline)
     :ok = :gen_udp.close(notify)
@@ -282,85 +238,6 @@ defmodule ExMoQ.Relay do
   @impl true
   def terminate(_reason, %{daemon: nil}), do: :ok
   def terminate(_reason, %{daemon: daemon}), do: stop_daemon(daemon)
-
-  ## Validating
-
-  @spec validate!(t()) :: t()
-  defp validate!(%__MODULE__{} = options) do
-    binary = binary!(options.binary)
-    output!(options.output)
-    log_level!(options.log_level)
-    quic = quic!(options.quic)
-    Enum.each([:tcp, :web], &listener!(&1, Map.fetch!(options, &1), []))
-    internal!(options.internal)
-
-    if quic == nil and options.tcp == nil,
-      do: raise(ArgumentError, "a relay needs a :quic or a :tcp listener, both are nil")
-
-    %__MODULE__{options | binary: binary, quic: quic}
-  end
-
-  @spec binary!(Path.t() | nil) :: Path.t()
-  defp binary!(binary) do
-    find_binary(binary) ||
-      raise ArgumentError, "no moq-relay binary found; see ExMoQ.Relay.find_binary/1"
-  end
-
-  @spec output!(term()) :: :ok
-  defp output!(output) when output == nil or is_function(output, 1), do: :ok
-
-  defp output!(level) do
-    if level not in Logger.levels() do
-      raise ArgumentError,
-            ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(level)}"
-    end
-
-    :ok
-  end
-
-  @spec log_level!(term()) :: :ok
-  defp log_level!(level) when level in @log_levels, do: :ok
-
-  defp log_level!(other) do
-    raise ArgumentError,
-          ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
-  end
-
-  @spec quic!(term()) :: {:auto | :inet.port_number(), quic_listener_opts()} | nil
-  defp quic!(nil), do: nil
-
-  defp quic!({_port, _opts} = quic), do: listener!(:quic, quic, tls_generate: "localhost")
-  defp quic!(port), do: quic!({port, []})
-
-  @spec internal!(term()) :: term()
-  defp internal!(internal) do
-    if internal == :auto or match?({:auto, _opts}, internal) do
-      raise ArgumentError,
-            ":internal must be a port or nil: the relay does not report the port it binds for :auto"
-    end
-
-    listener!(:internal, internal, [])
-  end
-
-  @spec listener!(atom(), term(), keyword()) :: term()
-  defp listener!(key, {port, opts}, defaults) when port != nil and is_list(opts) do
-    port!(key, port)
-    {port, Keyword.validate!(opts, [:ip | defaults])}
-  end
-
-  defp listener!(key, port, _defaults) do
-    port!(key, port)
-    port
-  end
-
-  @spec port!(atom(), term()) :: :ok
-  defp port!(_key, value) when value in [nil, :auto], do: :ok
-  defp port!(_key, port) when port in 1..65_535, do: :ok
-
-  defp port!(key, other) do
-    raise ArgumentError,
-          "#{inspect(key)} must be :auto, a port, {port, opts} or nil, got: #{inspect(other)}"
-  end
 
   ## Starting
 
@@ -417,7 +294,7 @@ defmodule ExMoQ.Relay do
 
   @spec resolved?(t()) :: boolean()
   defp resolved?(options),
-    do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, listener(options, &1)))
+    do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, Options.listener(options, &1)))
 
   @spec resolve(t(), :quic | :tcp | :web, :inet.port_number()) :: t()
   defp resolve(options, listener, port) do
@@ -482,7 +359,7 @@ defmodule ExMoQ.Relay do
   end
 
   @spec level_index(String.t()) :: non_neg_integer()
-  defp level_index(level), do: Enum.find_index(@log_levels, &(&1 == level))
+  defp level_index(level), do: Enum.find_index(Options.log_levels(), &(&1 == level))
 
   @spec stop_daemon(pid()) :: :ok
   defp stop_daemon(daemon) do
