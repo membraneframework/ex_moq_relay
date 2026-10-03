@@ -49,7 +49,7 @@ defmodule ExMoQ.Relay.AuthTest do
     :gen_tcp.close(conn)
 
     [status_line | rest] = String.split(response, "\r\n")
-    ["HTTP/1.1", status | _] = String.split(status_line, " ")
+    ["HTTP/1.1", status | _rest] = String.split(status_line, " ")
     body = rest |> Enum.join("\r\n") |> String.split("\r\n\r\n", parts: 2) |> List.last()
     {String.to_integer(status), body}
   end

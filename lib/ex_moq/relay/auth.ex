@@ -80,7 +80,7 @@ defmodule ExMoQ.Relay.Auth do
     opts = Keyword.validate!(opts, [:module, :socket, :name])
     module = Keyword.fetch!(opts, :module)
     socket = Keyword.get_lazy(opts, :socket, &socket_path/0)
-    _ = File.rm(socket)
+    _result = File.rm(socket)
 
     Bandit.start_link(
       plug: {ExMoQ.Relay.Auth.Plug, module},

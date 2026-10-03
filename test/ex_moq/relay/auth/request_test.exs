@@ -35,7 +35,7 @@ defmodule ExMoQ.Relay.Auth.RequestTest do
   end
 
   test "refuses a body that is not a request" do
-    assert {:error, _} = Request.decode("[]")
+    assert {:error, _reason} = Request.decode("[]")
     assert {:error, {:unknown_event, "nope"}} = Request.decode(~s({"event":"nope"}))
   end
 end
