@@ -39,7 +39,7 @@ defmodule ExMoQ.Relay do
       `[subscribe: patterns, publish: patterns]` to grant the two apart
       (`[subscribe: "**"]` lets anyone subscribe and no one publish);
       `{:url, url}` for an auth server the relay POSTs to (`http://`,
-      `https://`, or `unix://`, see [Authentication](https://doc.moq.dev/bin/relay/auth));
+      `https://`, or `unix://`; see `ExMoQ.Relay.Auth`);
       or `nil` for none, leaving auth to `:args`.
     * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
       `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the

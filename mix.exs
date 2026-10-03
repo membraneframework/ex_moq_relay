@@ -34,6 +34,9 @@ defmodule ExMoQ.Relay.MixProject do
   defp deps do
     [
       {:muontrap, "~> 2.0"},
+      {:jason, "~> 1.4"},
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.6"},
       {:ex_doc, ">= 0.40.0", only: :dev, runtime: false},
       {:dialyxir, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, ">= 0.0.0", only: :dev, runtime: false}
