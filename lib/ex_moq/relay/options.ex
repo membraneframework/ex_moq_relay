@@ -18,7 +18,7 @@ defmodule ExMoQ.Relay.Options do
     quic = quic!(options.quic)
     Enum.each([:tcp, :web], &listener!(&1, Map.fetch!(options, &1), []))
     internal!(options.internal)
-    auth_public!(options.auth_public)
+    auth!(options.auth)
 
     if quic == nil and options.tcp == nil,
       do: raise(ArgumentError, "a relay needs a :quic or a :tcp listener, both are nil")
@@ -38,21 +38,6 @@ defmodule ExMoQ.Relay.Options do
       end
     end
 
-    grant = fn flag, patterns ->
-      case List.wrap(patterns) do
-        [] -> []
-        list -> [flag, Enum.join(list, ",")]
-      end
-    end
-
-    auth =
-      if Keyword.keyword?(options.auth_public) do
-        grant.("--auth-public-subscribe", options.auth_public[:subscribe]) ++
-          grant.("--auth-public-publish", options.auth_public[:publish])
-      else
-        grant.("--auth-public", options.auth_public)
-      end
-
     tls =
       with {_port, opts} <- options.quic,
            host when host != nil <- opts[:tls_generate] do
@@ -67,7 +52,7 @@ defmodule ExMoQ.Relay.Options do
       listen.("--web-http-listen", :web) ++
       listen.("--internal-listen", :internal) ++
       tls ++
-      auth ++
+      auth_args(options.auth) ++
       options.args
   end
 
@@ -111,9 +96,35 @@ defmodule ExMoQ.Relay.Options do
           ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
   end
 
-  @spec auth_public!(term()) :: :ok
-  defp auth_public!(auth_public) do
-    if Keyword.keyword?(auth_public), do: Keyword.validate!(auth_public, [:subscribe, :publish])
+  @spec auth_args(Relay.auth()) :: [String.t()]
+  defp auth_args({:url, url}), do: ["--auth-url", url]
+  defp auth_args(nil), do: []
+
+  defp auth_args(auth) do
+    grant = fn flag, patterns ->
+      case List.wrap(patterns) do
+        [] -> []
+        list -> [flag, Enum.join(list, ",")]
+      end
+    end
+
+    if Keyword.keyword?(auth) do
+      grant.("--auth-public-subscribe", auth[:subscribe]) ++
+        grant.("--auth-public-publish", auth[:publish])
+    else
+      grant.("--auth-public", auth)
+    end
+  end
+
+  @spec auth!(term()) :: :ok
+  defp auth!({:url, url}) when is_binary(url) and url != "", do: :ok
+
+  defp auth!({:url, other}) do
+    raise ArgumentError, ":auth {:url, url} needs a non-empty string, got: #{inspect(other)}"
+  end
+
+  defp auth!(auth) do
+    if Keyword.keyword?(auth), do: Keyword.validate!(auth, [:subscribe, :publish])
     :ok
   end
 

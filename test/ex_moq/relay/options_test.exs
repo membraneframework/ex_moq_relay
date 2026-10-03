@@ -27,7 +27,11 @@ defmodule ExMoQ.Relay.OptionsTest do
     end
 
     assert_raise ArgumentError, ~r/unknown keys \[:subscibe\]/, fn ->
-      Relay.start(relay!(auth_public: [subscibe: "**"]))
+      Relay.start(relay!(auth: [subscibe: "**"]))
+    end
+
+    assert_raise ArgumentError, ~r/:auth \{:url, url\} needs a non-empty string/, fn ->
+      Relay.start(relay!(auth: {:url, ""}))
     end
 
     assert_raise ArgumentError, ~r/unknown keys \[:host\]/, fn ->
@@ -60,7 +64,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                  tcp: 1,
                  internal: nil,
                  log_level: "info",
-                 auth_public: ["anon/**", "demo/**"],
+                 auth: ["anon/**", "demo/**"],
                  args: ["--stats-enabled"]
                )
              ) == [
@@ -125,7 +129,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                relay!(
                  quic: nil,
                  tcp: 1,
-                 auth_public: [subscribe: ["demo/**", "live/**"], publish: "uploads/**"]
+                 auth: [subscribe: ["demo/**", "live/**"], publish: "uploads/**"]
                )
              ) == [
                "--log-level",
@@ -138,27 +142,28 @@ defmodule ExMoQ.Relay.OptionsTest do
                "uploads/**"
              ]
 
-      assert Relay.args(relay!(quic: nil, tcp: 1, auth_public: [subscribe: "**"])) ==
+      assert Relay.args(relay!(quic: nil, tcp: 1, auth: [subscribe: "**"])) ==
                ["--log-level", "warn", "--listen-tcp-bind", "127.0.0.1:1"] ++
                  ["--auth-public-subscribe", "**"]
     end
 
-    test "auth_public: nil grants nothing, leaving auth to extra args" do
+    test "auth: nil grants nothing; {:url, url} admits through a server" do
+      assert Relay.args(relay!(quic: nil, tcp: 1, internal: nil, auth: nil)) == [
+               "--log-level",
+               "warn",
+               "--listen-tcp-bind",
+               "127.0.0.1:1"
+             ]
+
       assert Relay.args(
-               relay!(
-                 quic: nil,
-                 tcp: 1,
-                 internal: nil,
-                 auth_public: nil,
-                 args: ["--auth-url", "http://127.0.0.1:4440/"]
-               )
+               relay!(quic: nil, tcp: 1, internal: nil, auth: {:url, "unix:///tmp/auth.sock"})
              ) == [
                "--log-level",
                "warn",
                "--listen-tcp-bind",
                "127.0.0.1:1",
                "--auth-url",
-               "http://127.0.0.1:4440/"
+               "unix:///tmp/auth.sock"
              ]
     end
 

@@ -34,10 +34,13 @@ defmodule ExMoQ.Relay do
       share its port number with `:quic`.
     * `:internal` - the HTTP listener serving `/health`, `/metrics` and
       `/sessions`: a port or `nil` (default). It cannot be `:auto`.
-    * `:auth_public` - path patterns anonymous sessions may publish and
-      subscribe to, a string or a list (default `"**"`, everything); `nil`
-      for none. `[subscribe: patterns, publish: patterns]` grants the two
-      apart: `[subscribe: "**"]` lets anyone subscribe and no one publish.
+    * `:auth` - how sessions are admitted (default `"**"`, everything):
+      path patterns (a string or a list) for anonymous access;
+      `[subscribe: patterns, publish: patterns]` to grant the two apart
+      (`[subscribe: "**"]` lets anyone subscribe and no one publish);
+      `{:url, url}` for an auth server the relay POSTs to (`http://`,
+      `https://`, or `unix://`, see [Authentication](https://doc.moq.dev/bin/relay/auth));
+      or `nil` for none, leaving auth to `:args`.
     * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
       `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the
       environment, which the relay does not inherit.
@@ -61,8 +64,12 @@ defmodule ExMoQ.Relay do
   @typedoc "Path patterns, like `\"anon/**\"`: one, or a list."
   @type patterns :: String.t() | [String.t()]
 
-  @typedoc "What anonymous sessions are granted, see `:auth_public`."
-  @type auth_public :: patterns() | [subscribe: patterns(), publish: patterns()] | nil
+  @typedoc "How sessions are admitted, see `:auth`."
+  @type auth ::
+          patterns()
+          | [subscribe: patterns(), publish: patterns()]
+          | {:url, String.t()}
+          | nil
 
   @typedoc "A listener port: `:auto` until the relay binds it."
   @type port_option :: :auto | :inet.port_number() | nil
@@ -89,7 +96,7 @@ defmodule ExMoQ.Relay do
           tcp: listener_option(),
           web: listener_option(),
           internal: :inet.port_number() | {:inet.port_number(), listener_opts()} | nil,
-          auth_public: auth_public(),
+          auth: auth(),
           log_level: String.t(),
           args: [String.t()],
           output: output(),
@@ -103,7 +110,7 @@ defmodule ExMoQ.Relay do
             tcp: nil,
             web: nil,
             internal: nil,
-            auth_public: "**",
+            auth: "**",
             log_level: "warn",
             args: [],
             output: :info,

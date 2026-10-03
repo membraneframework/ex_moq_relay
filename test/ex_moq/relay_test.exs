@@ -226,10 +226,10 @@ defmodule ExMoQ.RelayTest do
     end
 
     test "a relay that binds its listeners but cannot authenticate is not ready" do
-      options = %Relay{tcp: :auto, auth_public: nil, output: nil}
+      options = %Relay{tcp: :auto, auth: nil, output: nil}
       assert {:error, {:exit_status, 1}} = Relay.start(options)
 
-      options = %Relay{options | auth_public: [subscribe: "**"]}
+      options = %Relay{options | auth: [subscribe: "**"]}
       assert %Info{} = Relay.info(start_supervised!({Relay, options}))
     end
   end
