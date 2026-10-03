@@ -19,6 +19,22 @@ defmodule ExMoQ.Relay.InfoTest do
     assert %Info{tcp_url: "tcp://[::1]:1"} = Info.new(options)
   end
 
+  test "a listener with an :ip of its own is reached on it" do
+    options = %Relay{
+      ip: {0, 0, 0, 0},
+      quic: {4443, tls_generate: "localhost", ip: {192, 0, 2, 1}},
+      web: {4443, ip: {0, 0, 0, 0, 0, 0, 0, 1}},
+      internal: {9101, ip: {0, 0, 0, 0}}
+    }
+
+    assert %Info{
+             quic_url: "https://192.0.2.1:4443",
+             web_url: "http://[::1]:4443",
+             internal_url: "http://127.0.0.1:9101",
+             tls: :generated
+           } = Info.new(options)
+  end
+
   test "tls tells a generated certificate from a provided one, and is nil without QUIC" do
     assert %Info{tls: :generated} = Info.new(%Relay{quic: {1, tls_generate: "example.com"}})
     assert %Info{tls: :provided} = Info.new(%Relay{quic: {1, tls_generate: nil}})

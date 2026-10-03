@@ -22,6 +22,8 @@ defmodule ExMoQ.Relay do
 
     * `:binary` - path to the relay; see `find_binary/1` for the default.
     * `:ip` - the address the listeners bind to (default `{127, 0, 0, 1}`).
+      A listener binds to one of its own as `{port, ip: ip}`, like
+      `web: {:auto, ip: {127, 0, 0, 1}}` next to a public `:quic`.
     * `:quic` - the QUIC listener: `:auto` (default), a port, or `nil`. Its
       certificate is generated for `"localhost"`; `{port, tls_generate: host}`
       names another host, and `{port, tls_generate: nil}` generates none, for
@@ -58,11 +60,17 @@ defmodule ExMoQ.Relay do
   @typedoc "A listener port: `:auto` until the relay binds it."
   @type port_option :: :auto | :inet.port_number() | nil
 
+  @typedoc "A listener: its port, or `{port, opts}`."
+  @type listener_option :: port_option() | {:auto | :inet.port_number(), listener_opts()}
+
+  @typedoc "Options of a listener, for `{port, opts}`: the address it binds to."
+  @type listener_opts :: [{:ip, :inet.ip_address()}]
+
   @typedoc "The QUIC listener, see `:quic`."
   @type quic_option :: port_option() | {:auto | :inet.port_number(), quic_listener_opts()}
 
   @typedoc "Options of the QUIC listener, for `{port, opts}` in `:quic`."
-  @type quic_listener_opts :: [{:tls_generate, String.t() | nil}]
+  @type quic_listener_opts :: [{:tls_generate, String.t() | nil} | {:ip, :inet.ip_address()}]
 
   @typedoc "Where the relay's output lines go."
   @type output :: Logger.level() | (String.t() -> any()) | nil
@@ -71,9 +79,9 @@ defmodule ExMoQ.Relay do
           binary: Path.t() | nil,
           ip: :inet.ip_address(),
           quic: quic_option(),
-          tcp: port_option(),
-          web: port_option(),
-          internal: :inet.port_number() | nil,
+          tcp: listener_option(),
+          web: listener_option(),
+          internal: :inet.port_number() | {:inet.port_number(), listener_opts()} | nil,
           auth_public: String.t() | [String.t()] | nil,
           log_level: String.t(),
           args: [String.t()],
@@ -178,10 +186,12 @@ defmodule ExMoQ.Relay do
   def args(%__MODULE__{} = options) do
     options = validate!(options)
 
-    listen = fn
-      _flag, nil -> []
-      flag, :auto -> [flag, address(options.ip, 0)]
-      flag, port -> [flag, address(options.ip, port)]
+    listen = fn flag, key ->
+      case listener(options, key) do
+        nil -> []
+        {:auto, ip} -> [flag, address(ip, 0)]
+        {port, ip} -> [flag, address(ip, port)]
+      end
     end
 
     auth =
@@ -192,25 +202,33 @@ defmodule ExMoQ.Relay do
       end
 
     tls =
-      case options.quic do
-        {_port, tls_generate: host} when host != nil -> ["--listen-tls-generate", host]
+      with {_port, opts} <- options.quic,
+           host when host != nil <- opts[:tls_generate] do
+        ["--listen-tls-generate", host]
+      else
         _no_certificate -> []
       end
 
     ["--log-level", options.log_level] ++
-      listen.("--listen", quic_port(options)) ++
-      listen.("--listen-tcp-bind", options.tcp) ++
-      listen.("--web-http-listen", options.web) ++
-      listen.("--internal-listen", options.internal) ++
+      listen.("--listen", :quic) ++
+      listen.("--listen-tcp-bind", :tcp) ++
+      listen.("--web-http-listen", :web) ++
+      listen.("--internal-listen", :internal) ++
       tls ++
       auth ++
       options.args
   end
 
   @doc false
-  @spec quic_port(t()) :: port_option()
-  def quic_port(%__MODULE__{quic: {port, _tls}}), do: port
-  def quic_port(%__MODULE__{quic: nil}), do: nil
+  @spec listener(t(), :quic | :tcp | :web | :internal) ::
+          {:auto | :inet.port_number(), :inet.ip_address()} | nil
+  def listener(%__MODULE__{} = options, key) do
+    case Map.fetch!(options, key) do
+      nil -> nil
+      {port, opts} -> {port, Keyword.get(opts, :ip, options.ip)}
+      port -> {port, options.ip}
+    end
+  end
 
   @doc false
   @spec address(:inet.ip_address(), :inet.port_number()) :: String.t()
@@ -273,7 +291,7 @@ defmodule ExMoQ.Relay do
     output!(options.output)
     log_level!(options.log_level)
     quic = quic!(options.quic)
-    Enum.each([:tcp, :web], &port!(&1, Map.fetch!(options, &1)))
+    Enum.each([:tcp, :web], &listener!(&1, Map.fetch!(options, &1), []))
     internal!(options.internal)
 
     if quic == nil and options.tcp == nil,
@@ -304,36 +322,45 @@ defmodule ExMoQ.Relay do
   defp log_level!(level) when level in @log_levels, do: :ok
 
   defp log_level!(other) do
-      raise ArgumentError,
-        ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
+    raise ArgumentError,
+          ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
   end
 
   @spec quic!(term()) :: {:auto | :inet.port_number(), quic_listener_opts()} | nil
   defp quic!(nil), do: nil
 
-  defp quic!({port, opts}) when is_list(opts) do
-    if port == nil, do: raise(ArgumentError, "a :quic listener needs a port or :auto, got: nil")
-    port!(:quic, port)
-    {port, Keyword.validate!(opts, tls_generate: "localhost")}
-  end
-
+  defp quic!({_port, _opts} = quic), do: listener!(:quic, quic, tls_generate: "localhost")
   defp quic!(port), do: quic!({port, []})
 
-  @spec internal!(term()) :: :ok
-  defp internal!(:auto) do
+  @spec internal!(term()) :: term()
+  defp internal!(internal) do
+    if internal == :auto or match?({:auto, _opts}, internal) do
       raise ArgumentError,
-        ":internal must be a port or nil: the relay does not report the port it binds for :auto"
+            ":internal must be a port or nil: the relay does not report the port it binds for :auto"
+    end
+
+    listener!(:internal, internal, [])
   end
 
-  defp internal!(port), do: port!(:internal, port)
+  @spec listener!(atom(), term(), keyword()) :: term()
+  defp listener!(key, {port, opts}, defaults) when port != nil and is_list(opts) do
+    port!(key, port)
+    {port, Keyword.validate!(opts, [:ip | defaults])}
+  end
+
+  defp listener!(key, port, _defaults) do
+    port!(key, port)
+    port
+  end
 
   @spec port!(atom(), term()) :: :ok
   defp port!(_key, value) when value in [nil, :auto], do: :ok
   defp port!(_key, port) when port in 1..65_535, do: :ok
 
-  defp port!(key, other),
-    do:
-      raise(ArgumentError, "#{inspect(key)} must be :auto, a port or nil, got: #{inspect(other)}")
+  defp port!(key, other) do
+    raise ArgumentError,
+          "#{inspect(key)} must be :auto, a port, {port, opts} or nil, got: #{inspect(other)}"
+  end
 
   ## Starting
 
@@ -389,14 +416,14 @@ defmodule ExMoQ.Relay do
   end
 
   @spec resolved?(t()) :: boolean()
-  defp resolved?(options), do: :auto not in [quic_port(options), options.tcp, options.web]
+  defp resolved?(options),
+    do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, listener(options, &1)))
 
   @spec resolve(t(), :quic | :tcp | :web, :inet.port_number()) :: t()
   defp resolve(options, listener, port) do
-    case {listener, options} do
-      {:quic, %__MODULE__{quic: {:auto, tls}}} -> %__MODULE__{options | quic: {port, tls}}
-      {:tcp, %__MODULE__{tcp: :auto}} -> %__MODULE__{options | tcp: port}
-      {:web, %__MODULE__{web: :auto}} -> %__MODULE__{options | web: port}
+    case Map.fetch!(options, listener) do
+      :auto -> Map.replace!(options, listener, port)
+      {:auto, opts} -> Map.replace!(options, listener, {port, opts})
       _other -> options
     end
   end

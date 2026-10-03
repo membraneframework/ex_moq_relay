@@ -199,6 +199,29 @@ defmodule ExMoQ.RelayTest do
       assert %Info{tcp_url: "tcp://127.0.0.1:" <> _port} = Relay.info(relay)
     end
 
+    test "binds a listener to an :ip of its own, and reports the port it bound there" do
+      me = self()
+
+      options =
+        %Relay{
+          quic: nil,
+          tcp: :auto,
+          web: {:auto, ip: {0, 0, 0, 0}},
+          log_level: "info",
+          output: &send(me, {:line, &1})
+        }
+
+      info = Relay.info(start_supervised!({Relay, options}))
+      assert %URI{host: "127.0.0.1", port: tcp} = URI.parse(info.tcp_url)
+      assert %URI{host: "127.0.0.1", port: web} = URI.parse(info.web_url)
+      assert {200, _body} = get(info.web_url <> "/health")
+
+      {:messages, messages} = Process.info(self(), :messages)
+      lines = for {:line, line} <- messages, do: line
+      assert Enum.any?(lines, &(&1 =~ "listening (tcp) addr=127.0.0.1:#{tcp}"))
+      assert Enum.any?(lines, &(&1 =~ ~s(listening addr=0.0.0.0:#{web} kind="http")))
+    end
+
     test "a relay that binds its listeners but cannot authenticate is not ready" do
       options = %Relay{tcp: :auto, auth_public: nil, output: nil}
       assert {:error, {:exit_status, 1}} = Relay.start(options)

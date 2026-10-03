@@ -36,24 +36,25 @@ defmodule ExMoQ.Relay.Info do
   @spec new(Relay.t()) :: t()
   def new(%Relay{} = options) do
     %__MODULE__{
-      quic_url: url(options, "https", Relay.quic_port(options)),
-      tcp_url: url(options, "tcp", options.tcp),
-      web_url: url(options, "http", options.web),
-      internal_url: url(options, "http", options.internal),
+      quic_url: url(options, "https", :quic),
+      tcp_url: url(options, "tcp", :tcp),
+      web_url: url(options, "http", :web),
+      internal_url: url(options, "http", :internal),
       tls: tls(options.quic)
     }
   end
 
   @spec tls(Relay.quic_option()) :: :generated | :provided | nil
   defp tls(nil), do: nil
-  defp tls({_port, tls_generate: nil}), do: :provided
-  defp tls({_port, tls_generate: _host}), do: :generated
+  defp tls({_port, opts}), do: if(opts[:tls_generate], do: :generated, else: :provided)
 
-  @spec url(Relay.t(), String.t(), :inet.port_number() | nil) :: String.t() | nil
-  defp url(_options, _scheme, nil), do: nil
-
-  defp url(options, scheme, port) when is_integer(port),
-    do: "#{scheme}://#{Relay.address(reachable(options.ip), port)}"
+  @spec url(Relay.t(), String.t(), :quic | :tcp | :web | :internal) :: String.t() | nil
+  defp url(options, scheme, key) do
+    case Relay.listener(options, key) do
+      nil -> nil
+      {port, ip} when is_integer(port) -> "#{scheme}://#{Relay.address(reachable(ip), port)}"
+    end
+  end
 
   @spec reachable(:inet.ip_address()) :: :inet.ip_address()
   defp reachable({0, 0, 0, 0}), do: {127, 0, 0, 1}

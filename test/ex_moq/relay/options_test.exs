@@ -21,6 +21,14 @@ defmodule ExMoQ.Relay.OptionsTest do
     assert_raise ArgumentError, ~r/:log_level must be one of/, fn ->
       Relay.start_link(relay!(log_level: "WARN"))
     end
+
+    assert_raise ArgumentError, ~r/:internal must be a port or nil/, fn ->
+      Relay.start(relay!(internal: {:auto, ip: {0, 0, 0, 0}}))
+    end
+
+    assert_raise ArgumentError, ~r/unknown keys \[:host\]/, fn ->
+      Relay.start(relay!(web: {4443, host: "localhost"}))
+    end
   end
 
   describe "args/1" do
@@ -78,6 +86,34 @@ defmodule ExMoQ.Relay.OptionsTest do
 
       assert Relay.args(relay!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1, internal: nil)) ==
                ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
+    end
+
+    test "a listener with an :ip of its own binds to it" do
+      options =
+        relay!(
+          ip: {0, 0, 0, 0},
+          quic: {4443, ip: {192, 0, 2, 1}},
+          tcp: {:auto, ip: {0, 0, 0, 0, 0, 0, 0, 1}},
+          web: {4443, ip: {127, 0, 0, 1}},
+          internal: 9101
+        )
+
+      assert Relay.args(options) == [
+               "--log-level",
+               "warn",
+               "--listen",
+               "192.0.2.1:4443",
+               "--listen-tcp-bind",
+               "[::1]:0",
+               "--web-http-listen",
+               "127.0.0.1:4443",
+               "--internal-listen",
+               "0.0.0.0:9101",
+               "--listen-tls-generate",
+               "localhost",
+               "--auth-public",
+               "**"
+             ]
     end
 
     test "auth_public: nil grants nothing, leaving auth to extra args" do
