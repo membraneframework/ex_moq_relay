@@ -105,7 +105,15 @@ defmodule ExMoQ.Relay.Auth.Request do
   defp token(_other), do: nil
 
   @spec tls(term()) :: tls() | nil
-  defp tls(%{} = map), do: take(map, [{"name", :name}, {"fingerprint", :fingerprint}, {"expires", :expires}, {"issuer", :issuer}])
+  defp tls(%{} = map),
+    do:
+      take(map, [
+        {"name", :name},
+        {"fingerprint", :fingerprint},
+        {"expires", :expires},
+        {"issuer", :issuer}
+      ])
+
   defp tls(_other), do: nil
 
   @spec bytes(term()) :: bytes() | nil

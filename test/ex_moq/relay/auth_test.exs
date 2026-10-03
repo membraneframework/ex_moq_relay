@@ -22,7 +22,12 @@ defmodule ExMoQ.Relay.AuthTest do
     socket = Auth.socket_path()
     start_supervised!({Auth, module: SubscribeAll, socket: socket})
 
-    assert {200, body} = post(socket, ~s({"id":"1","event":"connect","node":"n","transport":"tcp","path":"/"}))
+    assert {200, body} =
+             post(
+               socket,
+               ~s({"id":"1","event":"connect","node":"n","transport":"tcp","path":"/"})
+             )
+
     assert Jason.decode!(body) == %{"subscribe" => ["**"]}
   end
 
