@@ -36,7 +36,8 @@ defmodule ExMoQ.Relay do
       subscribe to, a string or a list (default `"**"`, everything); `nil`
       for none.
     * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
-      `"info"`, `"debug"` or `"trace"`.
+      `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the
+      environment, which the relay does not inherit.
     * `:args` - extra command-line arguments.
     * `:output` - where the relay's output lines go: a `Logger` level to log
       them at (default `:info`), a 1-arity function to call with each, or
@@ -126,10 +127,6 @@ defmodule ExMoQ.Relay do
 
   Raises `ArgumentError` when the relay binary is not found or the options
   are ones the relay cannot run with.
-
-  A relay that exits with a non-zero status before it is ready exits the
-  caller with `{:exit_status, status}` unless the caller traps exits, as
-  with `GenServer.start_link/3`; `start/1` returns that error instead.
   """
   @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start_link(%__MODULE__{} = options),
@@ -157,10 +154,12 @@ defmodule ExMoQ.Relay do
     System.find_executable(binary || System.get_env("MOQ_RELAY") || "moq-relay")
   end
 
-  @doc "The relay binary's version, e.g. `\"0.15.8\"`."
+  @doc """
+  The relay binary's version, e.g. `"0.15.8"`.
+  """
   @spec version(Path.t() | nil) :: {:ok, String.t()} | {:error, version_error()}
-  def version(binary \\ find_binary()) do
-    with path when is_binary(path) <- binary || {:error, :no_binary},
+  def version(binary \\ nil) do
+    with path when is_binary(path) <- find_binary(binary) || {:error, :no_binary},
          {out, 0} <- System.cmd(path, ["--version"], stderr_to_stdout: true),
          ["moq-relay", version] <- out |> String.trim() |> String.split(" ", parts: 2) do
       {:ok, version}
@@ -244,12 +243,12 @@ defmodule ExMoQ.Relay do
       {:ok, %{options: options} = state} ->
         {:ok, %{daemon: state.daemon, monitor: state.monitor, info: Info.new(options)}}
 
-      {:error, {:not_ready, _timeout_ms}} = error ->
+      {:error, {:not_ready, _timeout_ms} = reason} ->
         stop_daemon(daemon)
-        error
+        {:stop, reason}
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
@@ -257,13 +256,10 @@ defmodule ExMoQ.Relay do
   def handle_call(:info, _from, state), do: {:reply, state.info, state}
 
   @impl true
-  def handle_info({:listening, _listener, _port}, state), do: {:noreply, state}
-
-  # The link takes the relay down when the daemon exits abnormally; this
-  # covers a relay that exits with status 0, whose `:normal` exit the link
-  # ignores.
   def handle_info({:DOWN, monitor, :process, _daemon, reason}, %{monitor: monitor} = state),
     do: {:stop, reason, %{state | daemon: nil}}
+
+  def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, %{daemon: nil}), do: :ok
@@ -296,12 +292,10 @@ defmodule ExMoQ.Relay do
   defp output!(output) when output == nil or is_function(output, 1), do: :ok
 
   defp output!(level) do
-    if level not in Logger.levels(),
-      do:
-        raise(
-          ArgumentError,
-          ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(level)}"
-        )
+    if level not in Logger.levels() do
+      raise ArgumentError,
+            ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(level)}"
+    end
 
     :ok
   end
@@ -309,12 +303,10 @@ defmodule ExMoQ.Relay do
   @spec log_level!(term()) :: :ok
   defp log_level!(level) when level in @log_levels, do: :ok
 
-  defp log_level!(other),
-    do:
-      raise(
-        ArgumentError,
+  defp log_level!(other) do
+      raise ArgumentError,
         ":log_level must be one of #{inspect(@log_levels)}, got: #{inspect(other)}"
-      )
+  end
 
   @spec quic!(term()) :: {:auto | :inet.port_number(), quic_listener_opts()} | nil
   defp quic!(nil), do: nil
@@ -328,12 +320,10 @@ defmodule ExMoQ.Relay do
   defp quic!(port), do: quic!({port, []})
 
   @spec internal!(term()) :: :ok
-  defp internal!(:auto),
-    do:
-      raise(
-        ArgumentError,
+  defp internal!(:auto) do
+      raise ArgumentError,
         ":internal must be a port or nil: the relay does not report the port it binds for :auto"
-      )
+  end
 
   defp internal!(port), do: port!(:internal, port)
 
@@ -353,20 +343,16 @@ defmodule ExMoQ.Relay do
     Path.join(System.tmp_dir!(), name)
   end
 
-  # `RUST_LOG` overrides `--log-level`, so it can lift just the targets that
-  # log the bound addresses to info; the lines below the asked-for level are
-  # then dropped in `logger_fun/2`.
   @spec env(t(), Path.t()) :: [{String.t(), String.t()}]
   defp env(options, notify_path) do
-    rust_log =
-      if raise_level?(options) do
-        directives = Enum.map(@listening_targets, &"#{&1}=info")
-        [{"RUST_LOG", Enum.join([options.log_level | directives], ",")}]
-      else
-        []
-      end
+    directives =
+      if raise_level?(options), do: Enum.map(@listening_targets, &"#{&1}=info"), else: []
 
-    [{"NOTIFY_SOCKET", notify_path}, {"NO_COLOR", "1"}] ++ rust_log
+    [
+      {"NOTIFY_SOCKET", notify_path},
+      {"NO_COLOR", "1"},
+      {"RUST_LOG", Enum.join([options.log_level | directives], ",")}
+    ]
   end
 
   @spec raise_level?(t()) :: boolean()

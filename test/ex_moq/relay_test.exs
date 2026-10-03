@@ -59,6 +59,15 @@ defmodule ExMoQ.RelayTest do
     end
   end
 
+  describe "version/1" do
+    test "reads the version the binary prints, and is an error without a binary",
+         %{tmp_dir: dir} do
+      path = script!(dir, "moq-relay", "#!/bin/sh\necho 'moq-relay 1.2.3'\n")
+      assert Relay.version(path) == {:ok, "1.2.3"}
+      assert Relay.version(Path.join(dir, "missing")) == {:error, :no_binary}
+    end
+  end
+
   describe "start_link/1" do
     test "a relay that exits before it is ready reports its exit and logs its output",
          %{tmp_dir: dir} do
@@ -87,11 +96,13 @@ defmodule ExMoQ.RelayTest do
       assert_received {:line, "Error: cannot bind"}
     end
 
-    test "a relay that never reports readiness is stopped", %{tmp_dir: dir} do
+    test "a relay that never reports readiness is stopped, and exits the caller",
+         %{tmp_dir: dir} do
       path = script!(dir, "silent", @fake_silent)
       options = %Relay{binary: path, ready_timeout: 300}
 
-      assert {:error, {:not_ready, 300}} = Relay.start_link(options)
+      {caller, ref} = spawn_monitor(fn -> Relay.start_link(options) end)
+      assert_receive {:DOWN, ^ref, :process, ^caller, {:not_ready, 300}}, 1_000
     end
 
     test "a ready relay reports the ports it bound, and exits with its status",
@@ -119,6 +130,10 @@ defmodule ExMoQ.RelayTest do
 
       assert_receive {:line, "2026-10-01T00:00:00.000000Z  WARN moq_relay::web: a warning"}
       refute_received {:line, "2026-10-01T00:00:00.000000Z  INFO" <> _line}
+
+      # A datagram that trails the readiness one is dropped.
+      send(relay, {:udp, make_ref(), {:local, ""}, 0, "STATUS=running\n"})
+      assert %Info{} = Relay.info(relay)
 
       ref = Process.monitor(relay)
       File.touch!(stop)
@@ -169,6 +184,19 @@ defmodule ExMoQ.RelayTest do
 
       assert :ok = Relay.stop(relay)
       refute Process.alive?(relay)
+    end
+
+    test "reports the ports it bound despite a RUST_LOG in the environment" do
+      previous = System.get_env("RUST_LOG")
+      System.put_env("RUST_LOG", "error")
+
+      on_exit(fn ->
+        if previous, do: System.put_env("RUST_LOG", previous), else: System.delete_env("RUST_LOG")
+      end)
+
+      options = %Relay{quic: nil, tcp: :auto, log_level: "info", output: nil}
+      relay = start_supervised!({Relay, options})
+      assert %Info{tcp_url: "tcp://127.0.0.1:" <> _port} = Relay.info(relay)
     end
 
     test "a relay that binds its listeners but cannot authenticate is not ready" do
