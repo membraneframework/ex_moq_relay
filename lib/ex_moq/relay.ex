@@ -39,7 +39,7 @@ defmodule ExMoQ.Relay do
       `[subscribe: patterns, publish: patterns]` to grant the two apart
       (`[subscribe: "**"]` lets anyone subscribe and no one publish);
       `{:url, url}` for an auth server the relay POSTs to (`http://`,
-      `https://`, or `unix://`; see `ExMoQ.Relay.Auth`);
+      `https://`, or `unix://`, see [Authentication](https://doc.moq.dev/bin/relay/auth));
       or `nil` for none, leaving auth to `:args`.
     * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
       `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the
@@ -59,7 +59,6 @@ defmodule ExMoQ.Relay do
   alias ExMoQ.Relay.{Info, Options}
 
   @listening_targets ["moq_relay::relay", "moq_relay::web", "moq_tokio::server"]
-  @httpc_profile :ex_moq_relay
 
   @typedoc "Path patterns, like `\"anon/**\"`: one, or a list."
   @type patterns :: String.t() | [String.t()]
@@ -131,16 +130,6 @@ defmodule ExMoQ.Relay do
           | {:exit_status, integer(), output :: String.t()}
           | {:unexpected_output, term()}
 
-  @typedoc """
-  Why `certificate_hash/2` could not read the hash: the relay has no `:web`
-  listener to read it from, or no certificate, or the request failed.
-  """
-  @type certificate_hash_error ::
-          :no_web_listener
-          | :no_certificate
-          | {:unexpected_response, status :: non_neg_integer(), body :: String.t()}
-          | {:unreachable, reason :: term()}
-
   @doc """
   A child spec for the relay. Relays can share a supervisor without explicit
   ids. Raises like `start_link/1`, in the caller rather than the supervisor.
@@ -172,47 +161,6 @@ defmodule ExMoQ.Relay do
   @doc "What the relay reports: where its listeners are reached."
   @spec info(GenServer.server()) :: Info.t()
   def info(relay), do: GenServer.call(relay, :info)
-
-  @doc """
-  The SHA-256 of the certificate the QUIC listener presents, hex-encoded,
-  for clients to pin a generated one by.
-
-  It is read from the web listener, so the relay needs `:web`. The relay
-  generates a new certificate each time it starts.
-  """
-  @spec certificate_hash(GenServer.server(), timeout()) ::
-          {:ok, String.t()} | {:error, certificate_hash_error()}
-  def certificate_hash(relay, timeout \\ 5_000) do
-    case info(relay) do
-      %Info{web_url: nil} -> {:error, :no_web_listener}
-      %Info{web_url: url} -> get_certificate_hash(url <> "/certificate.sha256", timeout)
-    end
-  end
-
-  # A profile of its own, as reaching a listener on an IPv6 address takes a
-  # setting that is not the default, and is set per profile.
-  @spec get_certificate_hash(String.t(), timeout()) ::
-          {:ok, String.t()} | {:error, certificate_hash_error()}
-  defp get_certificate_hash(url, timeout) do
-    _started = :inets.start(:httpc, profile: @httpc_profile)
-    :ok = :httpc.set_options([ipfamily: :inet6fb4], @httpc_profile)
-    request = {String.to_charlist(url), []}
-    http_opts = [timeout: timeout, connect_timeout: timeout]
-
-    case :httpc.request(:get, request, http_opts, [body_format: :binary], @httpc_profile) do
-      {:ok, {{_version, 200, _reason}, _headers, hash}} ->
-        {:ok, String.trim(hash)}
-
-      {:ok, {{_version, 404, _reason}, _headers, _body}} ->
-        {:error, :no_certificate}
-
-      {:ok, {{_version, status, _reason}, _headers, body}} ->
-        {:error, {:unexpected_response, status, body}}
-
-      {:error, reason} ->
-        {:error, {:unreachable, reason}}
-    end
-  end
 
   @doc "Stops the relay."
   @spec stop(GenServer.server(), timeout()) :: :ok

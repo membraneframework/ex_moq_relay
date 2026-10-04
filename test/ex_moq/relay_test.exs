@@ -121,7 +121,6 @@ defmodule ExMoQ.RelayTest do
       relay = start_supervised!(Supervisor.child_spec({Relay, options}, restart: :temporary))
 
       assert %Info{tcp_url: "tcp://127.0.0.1:4321", quic_url: nil} = Relay.info(relay)
-      assert Relay.certificate_hash(relay) == {:error, :no_web_listener}
       assert_received {:line, "fake relay starting: " <> args}
       assert args == Enum.join(Relay.args(options), " ")
 
@@ -176,8 +175,9 @@ defmodule ExMoQ.RelayTest do
 
       assert {200, _body} = get(info.internal_url <> "/health")
       assert {200, _body} = get(info.web_url <> "/health")
-      assert {:ok, hash} = Relay.certificate_hash(relay)
-      assert hash =~ ~r/^[0-9a-f]{64}$/
+      # The SHA-256 of the generated certificate, hex-encoded.
+      assert {200, fingerprint} = get(info.web_url <> "/certificate.sha256")
+      assert String.trim(fingerprint) =~ ~r/^[0-9a-f]{64}$/
 
       {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", tcp, [:binary])
       :gen_tcp.close(socket)
@@ -211,10 +211,7 @@ defmodule ExMoQ.RelayTest do
           output: &send(me, {:line, &1})
         }
 
-      relay = start_supervised!({Relay, options})
-      assert Relay.certificate_hash(relay) == {:error, :no_certificate}
-
-      info = Relay.info(relay)
+      info = Relay.info(start_supervised!({Relay, options}))
       assert %URI{host: "127.0.0.1", port: tcp} = URI.parse(info.tcp_url)
       assert %URI{host: "127.0.0.1", port: web} = URI.parse(info.web_url)
       assert {200, _body} = get(info.web_url <> "/health")
