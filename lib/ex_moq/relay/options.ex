@@ -145,7 +145,7 @@ defmodule ExMoQ.Relay.Options do
   defp require_listener(nil, nil),
     do: {:error, "a relay needs a :quic or a :tcp listener, both are nil"}
 
-  defp require_listener(quic, tcp), do: :ok
+  defp require_listener(_quic, _tcp), do: :ok
 
   @spec listener(atom(), term(), keyword()) :: {:ok, term()} | {:error, String.t()}
   defp listener(key, {port, opts}, defaults) when port != nil and is_list(opts) do
