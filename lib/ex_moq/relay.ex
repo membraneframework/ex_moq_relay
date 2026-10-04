@@ -56,7 +56,7 @@ defmodule ExMoQ.Relay do
 
   require Logger
 
-  alias ExMoQ.Relay.{Info, Options}
+  alias ExMoQ.Relay.{Args, Info, Options}
 
   @listening_targets ["moq_relay::relay", "moq_relay::web", "moq_tokio::server"]
 
@@ -213,7 +213,7 @@ defmodule ExMoQ.Relay do
   Raises `ArgumentError` when options fail validation.
   """
   @spec args(t()) :: [String.t()]
-  def args(%__MODULE__{} = relay), do: relay |> Options.validate!() |> Options.args()
+  def args(%__MODULE__{} = relay), do: relay |> Options.validate!() |> Args.args()
 
   ## Server
 
@@ -231,7 +231,7 @@ defmodule ExMoQ.Relay do
       env: env(options, path)
     ]
 
-    {:ok, daemon} = MuonTrap.Daemon.start_link(options.binary, Options.args(options), daemon_opts)
+    {:ok, daemon} = MuonTrap.Daemon.start_link(options.binary, Args.args(options), daemon_opts)
     state = %{options: options, daemon: daemon, monitor: Process.monitor(daemon)}
     result = await_ready(state, notify, false, deadline)
     :ok = :gen_udp.close(notify)
@@ -318,7 +318,7 @@ defmodule ExMoQ.Relay do
 
   @spec resolved?(Options.t()) :: boolean()
   defp resolved?(options),
-    do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, Options.listener(options, &1)))
+    do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, Args.listener(options, &1)))
 
   @spec resolve(Options.t(), :quic | :tcp | :web, :inet.port_number()) :: Options.t()
   defp resolve(options, listener, port) do
