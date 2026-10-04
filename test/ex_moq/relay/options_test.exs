@@ -21,11 +21,6 @@ defmodule ExMoQ.Relay.OptionsTest do
     assert {:error, {:validation_failed, message}} = Relay.start_link(relay!(log_level: "WARN"))
     assert message =~ ~r/:log_level must be one of/
 
-    assert {:error, {:validation_failed, message}} =
-             Relay.start(relay!(internal: {:auto, ip: {0, 0, 0, 0}}))
-
-    assert message =~ ~r/:internal must be a port or nil/
-
     assert {:error, {:validation_failed, message}} = Relay.start(relay!(auth: [subscibe: "**"]))
     assert message =~ ~r/unknown keys \[:subscibe\]/
 

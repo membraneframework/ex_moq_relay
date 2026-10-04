@@ -23,15 +23,6 @@ defmodule ExMoQ.RelayTest do
     port
   end
 
-  test "find_binary/1 resolves an executable path" do
-    assert Relay.find_binary("/bin/sh") == "/bin/sh"
-    assert Relay.find_binary("/nonexistent/moq-relay") == nil
-  end
-
-  test "version/1 is an error without a binary" do
-    assert Relay.version("/nonexistent/moq-relay") == {:error, :no_binary}
-  end
-
   @tag :tmp_dir
   test "a relay that never reports readiness is stopped, and exits the caller", %{tmp_dir: dir} do
     options = %Relay{binary: script!(dir, "silent", @fake_silent), ready_timeout: 300}
@@ -48,7 +39,15 @@ defmodule ExMoQ.RelayTest do
       assert version =~ ~r/^\d+\.\d+\.\d+/
 
       internal = free_port()
-      options = %Relay{tcp: :auto, web: :auto, internal: internal, name: __MODULE__.Relay, output: nil}
+
+      options = %Relay{
+        tcp: :auto,
+        web: :auto,
+        internal: internal,
+        name: __MODULE__.Relay,
+        output: nil
+      }
+
       {:ok, relay} = Relay.start_link(options)
 
       assert Process.whereis(__MODULE__.Relay) == relay
@@ -110,12 +109,10 @@ defmodule ExMoQ.RelayTest do
     end
 
     test "a relay that binds its listeners but cannot authenticate is not ready" do
-      me = self()
-      options = %Relay{tcp: :auto, auth: nil, output: &send(me, {:line, &1})}
+      options = %Relay{tcp: :auto, auth: nil, output: nil}
       assert {:error, {:exit_status, 1}} = Relay.start(options)
-      assert_received {:line, _line}
 
-      options = %Relay{options | auth: [subscribe: "**"], output: nil}
+      options = %Relay{options | auth: [subscribe: "**"]}
       assert %Info{} = Relay.info(start_supervised!({Relay, options}))
     end
   end

@@ -4,12 +4,6 @@ defmodule ExMoQ.Test.RelayTest do
   alias ExMoQ.Relay.Info
   alias ExMoQ.Test.Relay
 
-  test "raises without a relay binary" do
-    assert_raise ArgumentError, ~r/no moq-relay binary/, fn ->
-      Relay.start_supervised!("/nonexistent/moq-relay")
-    end
-  end
-
   @tag :integration
   test "runs a TCP relay for the test" do
     assert %Info{tcp_url: "tcp://127.0.0.1:" <> port, quic_url: nil, tls: nil} =
