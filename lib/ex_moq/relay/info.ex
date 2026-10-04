@@ -46,7 +46,7 @@ defmodule ExMoQ.Relay.Info do
     }
   end
 
-  @spec tls(Relay.quic_option()) :: :generated | :provided | nil
+  @spec tls(Relay.quic()) :: :generated | :provided | nil
   defp tls(nil), do: nil
   defp tls({_port, opts}), do: if(opts[:tls_generate], do: :generated, else: :provided)
 

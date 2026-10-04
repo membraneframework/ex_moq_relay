@@ -3,7 +3,7 @@ defmodule ExMoQ.Relay do
   Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS
   process.
 
-  The struct holds the options of a relay to start:
+  The struct holds the options of a relay to start (see `t:t/0`):
 
       {:ok, relay} = ExMoQ.Relay.start_link(%ExMoQ.Relay{tcp: :auto})
       ExMoQ.Relay.info(relay).tcp_url  #=> "tcp://127.0.0.1:54321"
@@ -17,39 +17,6 @@ defmodule ExMoQ.Relay do
 
   Starting returns once the relay's listeners are bound and it accepts
   sessions. The ports it picked for `:auto` are in `info/1`.
-
-  ## Options
-
-    * `:binary` - path to the relay; see `find_binary/1` for the default.
-    * `:ip` - the address the listeners bind to (default `{127, 0, 0, 1}`).
-      A listener binds to one of its own as `{port, ip: ip}`, like
-      `web: {:auto, ip: {127, 0, 0, 1}}` next to a public `:quic`.
-    * `:quic` - the QUIC listener: `:auto` (default), a port, or `nil`. Its
-      certificate is generated for `"localhost"`; `{port, tls_generate: host}`
-      names another host, and `{port, tls_generate: nil}` generates none, for
-      one passed in `:args`.
-    * `:tcp` - a plaintext TCP listener: `:auto`, a port, or `nil` (default).
-    * `:web` - the HTTP listener serving `/health`, `/certificate.sha256`,
-      `/fetch` and WebSocket: `:auto`, a port, or `nil` (default). It may
-      share its port number with `:quic`.
-    * `:internal` - the HTTP listener serving `/health`, `/metrics` and
-      `/sessions`: a port or `nil` (default). It cannot be `:auto`.
-    * `:auth` - how sessions are admitted (default `"**"`, everything):
-      path patterns (a string or a list) for anonymous access;
-      `[subscribe: patterns, publish: patterns]` to grant the two apart
-      (`[subscribe: "**"]` lets anyone subscribe and no one publish);
-      `{:url, url}` for an auth server the relay POSTs to (`http://`,
-      `https://`, or `unix://`, see [Authentication](https://doc.moq.dev/bin/relay/auth));
-      or `nil` for none, leaving auth to `:args`.
-    * `:log_level` - the relay's log level: `"error"`, `"warn"` (default),
-      `"info"`, `"debug"` or `"trace"`. It replaces a `RUST_LOG` of the
-      environment, which the relay does not inherit.
-    * `:args` - extra command-line arguments.
-    * `:output` - where the relay's output lines go: a `Logger` level to log
-      them at (default `:info`), a 1-arity function to call with each, or
-      `nil` to drop them.
-    * `:ready_timeout` - milliseconds to wait for readiness (default 15 000).
-    * `:name` - a name to register the relay's process under (default `nil`).
   """
 
   use GenServer
@@ -60,47 +27,111 @@ defmodule ExMoQ.Relay do
 
   @listening_targets ["moq_relay::relay", "moq_relay::web", "moq_tokio::server"]
 
-  @typedoc "Path patterns, like `\"anon/**\"`: one, or a list."
+  @typedoc false
   @type patterns :: String.t() | [String.t()]
 
-  @typedoc "How sessions are admitted, see `:auth`."
+  @typedoc false
+  @type listener_opts :: [{:ip, :inet.ip_address()}]
+
+  @typedoc false
+  @type quic_opts :: [{:tls_generate, String.t() | nil} | {:ip, :inet.ip_address()}]
+
+  @typedoc false
+  @type listener ::
+          :auto
+          | :inet.port_number()
+          | nil
+          | {:auto | :inet.port_number(), listener_opts()}
+
+  @typedoc "Path to the relay; when `nil` (default), see `find_binary/1`."
+  @type relay_binary :: Path.t() | nil
+
+  @typedoc """
+  Address the listeners bind to (default `{127, 0, 0, 1}`). A listener binds
+  to one of its own as `{port, ip: ip}`, like
+  `web: {:auto, ip: {127, 0, 0, 1}}` next to a public `:quic`.
+  """
+  @type ip :: :inet.ip_address()
+
+  @typedoc """
+  The QUIC listener: `:auto` (default), a port, `{port, opts}`, or `nil`. Its
+  certificate is generated for `"localhost"`; `{port, tls_generate: host}`
+  names another host, and `{port, tls_generate: nil}` generates none, for one
+  passed in `:args`.
+  """
+  @type quic ::
+          :auto
+          | :inet.port_number()
+          | nil
+          | {:auto | :inet.port_number(), quic_opts()}
+
+  @typedoc "A plaintext TCP listener: `:auto`, a port, `{port, opts}`, or `nil` (default)."
+  @type tcp :: listener()
+
+  @typedoc """
+  The HTTP listener serving `/health`, `/certificate.sha256`, `/fetch` and
+  WebSocket: `:auto`, a port, `{port, opts}`, or `nil` (default). It may share
+  its port number with `:quic`.
+  """
+  @type web :: listener()
+
+  @typedoc """
+  The HTTP listener serving `/health`, `/metrics` and `/sessions`: a port,
+  `{port, opts}`, or `nil` (default). Not `:auto`.
+  """
+  @type internal :: :inet.port_number() | {:inet.port_number(), listener_opts()} | nil
+
+  @typedoc """
+  How sessions are admitted (default `"**"`, everything): path patterns (a
+  string or a list) for anonymous access; `[subscribe: patterns, publish:
+  patterns]` to grant the two apart (`[subscribe: "**"]` lets anyone
+  subscribe and no one publish); `{:url, url}` for an auth server the relay
+  POSTs to (`http://`, `https://`, or `unix://`, see
+  [Authentication](https://doc.moq.dev/bin/relay/auth)); or `nil` for none,
+  leaving auth to `:args`.
+  """
   @type auth ::
           patterns()
           | [subscribe: patterns(), publish: patterns()]
           | {:url, String.t()}
           | nil
 
-  @typedoc "A listener port: `:auto` until the relay binds it."
-  @type port_option :: :auto | :inet.port_number() | nil
+  @typedoc """
+  The relay's log level: `"error"`, `"warn"` (default), `"info"`, `"debug"` or
+  `"trace"`. It replaces a `RUST_LOG` of the environment, which the relay does
+  not inherit.
+  """
+  @type log_level :: String.t()
 
-  @typedoc "A listener: its port, or `{port, opts}`."
-  @type listener_option :: port_option() | {:auto | :inet.port_number(), listener_opts()}
+  @typedoc "Extra command-line arguments (default `[]`)."
+  @type args :: [String.t()]
 
-  @typedoc "Options of a listener, for `{port, opts}`: the address it binds to."
-  @type listener_opts :: [{:ip, :inet.ip_address()}]
-
-  @typedoc "The QUIC listener, see `:quic`."
-  @type quic_option :: port_option() | {:auto | :inet.port_number(), quic_listener_opts()}
-
-  @typedoc "Options of the QUIC listener, for `{port, opts}` in `:quic`."
-  @type quic_listener_opts :: [{:tls_generate, String.t() | nil} | {:ip, :inet.ip_address()}]
-
-  @typedoc "Where the relay's output lines go."
+  @typedoc """
+  Where the relay's output lines go: a `Logger` level to log them at (default
+  `:info`), a 1-arity function to call with each, or `nil` to drop them.
+  """
   @type output :: Logger.level() | (String.t() -> any()) | nil
 
+  @typedoc "Milliseconds to wait for readiness (default `15_000`)."
+  @type ready_timeout :: non_neg_integer()
+
+  @typedoc "A name to register the relay's process under (default `nil`)."
+  @type name :: GenServer.name() | nil
+
+  @typedoc "Options of a relay to start."
   @type t :: %__MODULE__{
-          binary: Path.t() | nil,
-          ip: :inet.ip_address(),
-          quic: quic_option(),
-          tcp: listener_option(),
-          web: listener_option(),
-          internal: :inet.port_number() | {:inet.port_number(), listener_opts()} | nil,
+          binary: relay_binary(),
+          ip: ip(),
+          quic: quic(),
+          tcp: tcp(),
+          web: web(),
+          internal: internal(),
           auth: auth(),
-          log_level: String.t(),
-          args: [String.t()],
+          log_level: log_level(),
+          args: args(),
           output: output(),
-          ready_timeout: non_neg_integer(),
-          name: GenServer.name() | nil
+          ready_timeout: ready_timeout(),
+          name: name()
         }
 
   defstruct binary: nil,

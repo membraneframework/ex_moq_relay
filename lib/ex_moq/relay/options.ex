@@ -9,17 +9,17 @@ defmodule ExMoQ.Relay.Options do
 
   @type t :: %__MODULE__{
           binary: Path.t(),
-          ip: :inet.ip_address(),
-          quic: Relay.quic_option(),
-          tcp: Relay.listener_option(),
-          web: Relay.listener_option(),
-          internal: :inet.port_number() | {:inet.port_number(), Relay.listener_opts()} | nil,
+          ip: Relay.ip(),
+          quic: Relay.quic(),
+          tcp: Relay.tcp(),
+          web: Relay.web(),
+          internal: Relay.internal(),
           auth: Relay.auth(),
-          log_level: String.t(),
-          args: [String.t()],
+          log_level: Relay.log_level(),
+          args: Relay.args(),
           output: Relay.output(),
-          ready_timeout: non_neg_integer(),
-          name: GenServer.name() | nil
+          ready_timeout: Relay.ready_timeout(),
+          name: Relay.name()
         }
 
   @enforce_keys [
@@ -124,7 +124,7 @@ defmodule ExMoQ.Relay.Options do
   end
 
   @spec quic(term()) ::
-          {:ok, {:auto | :inet.port_number(), Relay.quic_listener_opts()} | nil}
+          {:ok, {:auto | :inet.port_number(), Relay.quic_opts()} | nil}
           | {:error, String.t()}
   defp quic(nil), do: {:ok, nil}
 
