@@ -5,38 +5,37 @@ defmodule ExMoQ.Relay.OptionsTest do
 
   defp relay!(fields), do: struct!(Relay, [binary: "/bin/sh"] ++ fields)
 
-  test "options the relay cannot run with are rejected before it is started" do
-    assert_raise ArgumentError, ~r/no moq-relay binary/, fn ->
-      Relay.start(relay!(binary: "/nonexistent/moq-relay"))
-    end
+  test "options that fail validation are rejected before the relay is started" do
+    assert {:error, {:validation_failed, message}} =
+             Relay.start(relay!(binary: "/nonexistent/moq-relay"))
 
-    assert_raise ArgumentError, ~r/needs a :quic or a :tcp listener/, fn ->
-      Relay.start(relay!(quic: nil, web: :auto))
-    end
+    assert message =~ ~r/no moq-relay binary/
+
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(quic: nil, web: :auto))
+    assert message =~ ~r/needs a :quic or a :tcp listener/
 
     assert_raise ArgumentError, ~r/:internal must be a port or nil/, fn ->
       Relay.child_spec(relay!(internal: :auto))
     end
 
-    assert_raise ArgumentError, ~r/:log_level must be one of/, fn ->
-      Relay.start_link(relay!(log_level: "WARN"))
-    end
+    assert {:error, {:validation_failed, message}} = Relay.start_link(relay!(log_level: "WARN"))
+    assert message =~ ~r/:log_level must be one of/
 
-    assert_raise ArgumentError, ~r/:internal must be a port or nil/, fn ->
-      Relay.start(relay!(internal: {:auto, ip: {0, 0, 0, 0}}))
-    end
+    assert {:error, {:validation_failed, message}} =
+             Relay.start(relay!(internal: {:auto, ip: {0, 0, 0, 0}}))
 
-    assert_raise ArgumentError, ~r/unknown keys \[:subscibe\]/, fn ->
-      Relay.start(relay!(auth: [subscibe: "**"]))
-    end
+    assert message =~ ~r/:internal must be a port or nil/
 
-    assert_raise ArgumentError, ~r/:auth \{:url, url\} needs a non-empty string/, fn ->
-      Relay.start(relay!(auth: {:url, ""}))
-    end
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(auth: [subscibe: "**"]))
+    assert message =~ ~r/unknown keys \[:subscibe\]/
 
-    assert_raise ArgumentError, ~r/unknown keys \[:host\]/, fn ->
-      Relay.start(relay!(web: {4443, host: "localhost"}))
-    end
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(auth: {:url, ""}))
+    assert message =~ ~r/:auth \{:url, url\} needs a non-empty string/
+
+    assert {:error, {:validation_failed, message}} =
+             Relay.start(relay!(web: {4443, host: "localhost"}))
+
+    assert message =~ ~r/unknown keys \[:host\]/
   end
 
   describe "args/1" do

@@ -34,8 +34,8 @@ defmodule ExMoQ.Relay.Info do
   defstruct @enforce_keys
 
   @doc false
-  @spec new(Relay.t()) :: t()
-  def new(%Relay{} = options) do
+  @spec new(Options.t()) :: t()
+  def new(%Options{} = options) do
     %__MODULE__{
       quic_url: url(options, "https", :quic),
       tcp_url: url(options, "tcp", :tcp),
@@ -49,7 +49,7 @@ defmodule ExMoQ.Relay.Info do
   defp tls(nil), do: nil
   defp tls({_port, opts}), do: if(opts[:tls_generate], do: :generated, else: :provided)
 
-  @spec url(Relay.t(), String.t(), :quic | :tcp | :web | :internal) :: String.t() | nil
+  @spec url(Options.t(), String.t(), :quic | :tcp | :web | :internal) :: String.t() | nil
   defp url(options, scheme, key) do
     case Options.listener(options, key) do
       nil -> nil

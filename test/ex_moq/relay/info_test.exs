@@ -3,9 +3,12 @@ defmodule ExMoQ.Relay.InfoTest do
 
   alias ExMoQ.Relay
   alias ExMoQ.Relay.Info
+  alias ExMoQ.Relay.Options
+
+  defp options!(fields), do: Options.validate!(struct!(Relay, [binary: "/bin/sh"] ++ fields))
 
   test "a listener on an unspecified address is reached on the loopback one; one that is off is nil" do
-    options = %Relay{ip: {0, 0, 0, 0}, quic: {4443, tls_generate: "localhost"}, internal: 9101}
+    options = options!(ip: {0, 0, 0, 0}, quic: {4443, tls_generate: "localhost"}, internal: 9101)
 
     assert Info.new(options) == %Info{
              quic_url: "https://127.0.0.1:4443",
@@ -15,17 +18,18 @@ defmodule ExMoQ.Relay.InfoTest do
              tls: :generated
            }
 
-    options = %Relay{ip: {0, 0, 0, 0, 0, 0, 0, 0}, quic: nil, tcp: 1}
+    options = options!(ip: {0, 0, 0, 0, 0, 0, 0, 0}, quic: nil, tcp: 1)
     assert %Info{tcp_url: "tcp://[::1]:1"} = Info.new(options)
   end
 
   test "a listener with an :ip of its own is reached on it" do
-    options = %Relay{
-      ip: {0, 0, 0, 0},
-      quic: {4443, tls_generate: "localhost", ip: {192, 0, 2, 1}},
-      web: {4443, ip: {0, 0, 0, 0, 0, 0, 0, 1}},
-      internal: {9101, ip: {0, 0, 0, 0}}
-    }
+    options =
+      options!(
+        ip: {0, 0, 0, 0},
+        quic: {4443, tls_generate: "localhost", ip: {192, 0, 2, 1}},
+        web: {4443, ip: {0, 0, 0, 0, 0, 0, 0, 1}},
+        internal: {9101, ip: {0, 0, 0, 0}}
+      )
 
     assert %Info{
              quic_url: "https://192.0.2.1:4443",
@@ -36,8 +40,8 @@ defmodule ExMoQ.Relay.InfoTest do
   end
 
   test "tls tells a generated certificate from a provided one, and is nil without QUIC" do
-    assert %Info{tls: :generated} = Info.new(%Relay{quic: {1, tls_generate: "example.com"}})
-    assert %Info{tls: :provided} = Info.new(%Relay{quic: {1, tls_generate: nil}})
-    assert %Info{tls: nil} = Info.new(%Relay{quic: nil, tcp: 1})
+    assert %Info{tls: :generated} = Info.new(options!(quic: {1, tls_generate: "example.com"}))
+    assert %Info{tls: :provided} = Info.new(options!(quic: {1, tls_generate: nil}))
+    assert %Info{tls: nil} = Info.new(options!(quic: nil, tcp: 1))
   end
 end

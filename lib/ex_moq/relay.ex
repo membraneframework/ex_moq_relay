@@ -117,46 +117,58 @@ defmodule ExMoQ.Relay do
             name: nil
 
   @typedoc """
-  Why the relay did not start: it exited with the given status, or it did
-  not report readiness within the given milliseconds.
+  Why the relay did not start: options failed validation, it exited with the
+  given status, or it did not report readiness within the given milliseconds.
   """
   @type start_error ::
-          {:exit_status, non_neg_integer()}
+          {:validation_failed, String.t()}
+          | {:exit_status, non_neg_integer()}
           | {:not_ready, timeout_ms :: non_neg_integer()}
 
-  @typedoc "Why `version/1` could not read the relay's version."
-  @type version_error ::
-          :no_binary
-          | {:exit_status, integer(), output :: String.t()}
-          | {:unexpected_output, term()}
-
   @doc """
-  A child spec for the relay. Relays can share a supervisor without explicit
-  ids. Raises like `start_link/1`, in the caller rather than the supervisor.
+  A child spec for the relay. Raises `ArgumentError` when options fail validation.
   """
   @spec child_spec(t()) :: Supervisor.child_spec()
-  def child_spec(%__MODULE__{} = options) do
+  def child_spec(%__MODULE__{} = relay) do
+    options = Options.validate!(relay)
+
     %{
       id: {__MODULE__, options.name || make_ref()},
-      start: {__MODULE__, :start_link, [Options.validate!(options)]},
+      start: {__MODULE__, :start_link, [options]},
       type: :worker
     }
   end
 
   @doc """
   Starts a relay linked to the caller and blocks until it is ready.
-
-  Raises `ArgumentError` when the relay binary is not found or the options
-  are ones the relay cannot run with.
   """
   @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  def start_link(%__MODULE__{} = options),
-    do: GenServer.start_link(__MODULE__, Options.validate!(options), name: options.name)
+  def start_link(%__MODULE__{} = relay) do
+    case Options.validate(relay) do
+      {:ok, options} -> start_link(options)
+      {:error, reason} -> {:error, {:validation_failed, reason}}
+    end
+  end
+
+  @doc false
+  @spec start_link(Options.t()) ::
+          {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start_link(%Options{} = options),
+    do: GenServer.start_link(__MODULE__, options, name: options.name)
 
   @doc "Starts a relay not linked to the caller; see `start_link/1`."
   @spec start(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  def start(%__MODULE__{} = options),
-    do: GenServer.start(__MODULE__, Options.validate!(options), name: options.name)
+  def start(%__MODULE__{} = relay) do
+    case Options.validate(relay) do
+      {:ok, options} -> start(options)
+      {:error, reason} -> {:error, {:validation_failed, reason}}
+    end
+  end
+
+  @doc false
+  @spec start(Options.t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start(%Options{} = options),
+    do: GenServer.start(__MODULE__, options, name: options.name)
 
   @doc "What the relay reports: where its listeners are reached."
   @spec info(GenServer.server()) :: Info.t()
@@ -178,7 +190,12 @@ defmodule ExMoQ.Relay do
   @doc """
   The relay binary's version, e.g. `"0.15.8"`.
   """
-  @spec version(Path.t() | nil) :: {:ok, String.t()} | {:error, version_error()}
+  @spec version(Path.t() | nil) ::
+          {:ok, String.t()}
+          | {:error,
+             :no_binary
+             | {:exit_status, integer(), output :: String.t()}
+             | {:unexpected_output, term()}}
   def version(binary \\ nil) do
     with path when is_binary(path) <- find_binary(binary) || {:error, :no_binary},
          {out, 0} <- System.cmd(path, ["--version"], stderr_to_stdout: true),
@@ -193,15 +210,15 @@ defmodule ExMoQ.Relay do
 
   @doc """
   The arguments the relay binary is run with; `:auto` ports are port 0.
-  Raises like `start_link/1`.
+  Raises `ArgumentError` when options fail validation.
   """
   @spec args(t()) :: [String.t()]
-  defdelegate args(options), to: Options
+  def args(%__MODULE__{} = relay), do: relay |> Options.validate!() |> Options.args()
 
   ## Server
 
   @impl true
-  def init(%__MODULE__{} = options) do
+  def init(%Options{} = options) do
     deadline = System.monotonic_time(:millisecond) + options.ready_timeout
     path = notify_path()
     File.rm(path)
@@ -254,7 +271,7 @@ defmodule ExMoQ.Relay do
     Path.join(System.tmp_dir!(), name)
   end
 
-  @spec env(t(), Path.t()) :: [{String.t(), String.t()}]
+  @spec env(Options.t(), Path.t()) :: [{String.t(), String.t()}]
   defp env(options, notify_path) do
     directives =
       if raise_level?(options), do: Enum.map(@listening_targets, &"#{&1}=info"), else: []
@@ -266,7 +283,7 @@ defmodule ExMoQ.Relay do
     ]
   end
 
-  @spec raise_level?(t()) :: boolean()
+  @spec raise_level?(Options.t()) :: boolean()
   defp raise_level?(options),
     do: not resolved?(options) and level_index(options.log_level) < level_index("info")
 
@@ -299,11 +316,11 @@ defmodule ExMoQ.Relay do
     end
   end
 
-  @spec resolved?(t()) :: boolean()
+  @spec resolved?(Options.t()) :: boolean()
   defp resolved?(options),
     do: not Enum.any?([:quic, :tcp, :web], &match?({:auto, _ip}, Options.listener(options, &1)))
 
-  @spec resolve(t(), :quic | :tcp | :web, :inet.port_number()) :: t()
+  @spec resolve(Options.t(), :quic | :tcp | :web, :inet.port_number()) :: Options.t()
   defp resolve(options, listener, port) do
     case Map.fetch!(options, listener) do
       :auto -> Map.replace!(options, listener, port)
@@ -314,7 +331,7 @@ defmodule ExMoQ.Relay do
 
   # Runs in the daemon's process, so the lines a relay prints as it exits are
   # written out before the exit reaches the relay's process.
-  @spec logger_fun(t(), pid()) :: (String.t() -> :ok)
+  @spec logger_fun(Options.t(), pid()) :: (String.t() -> :ok)
   defp logger_fun(options, server) do
     filter_level? = raise_level?(options)
     resolve? = not resolved?(options)
@@ -344,7 +361,7 @@ defmodule ExMoQ.Relay do
     end)
   end
 
-  @spec output(t(), String.t()) :: :ok
+  @spec output(Options.t(), String.t()) :: :ok
   defp output(options, line) do
     case options.output do
       nil -> :ok
