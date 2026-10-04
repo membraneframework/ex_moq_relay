@@ -32,8 +32,4 @@ defmodule ExMoQ.Test.Relay do
     |> ExUnit.Callbacks.start_supervised!(restart: :temporary)
     |> ExMoQ.Relay.info()
   end
-
-  @doc "See `ExMoQ.Relay.find_binary/1`."
-  @spec find_binary(Path.t() | nil) :: Path.t() | nil
-  defdelegate find_binary(binary \\ nil), to: ExMoQ.Relay
 end
