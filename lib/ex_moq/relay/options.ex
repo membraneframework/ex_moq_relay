@@ -51,7 +51,7 @@ defmodule ExMoQ.Relay.Options do
          {:ok, web} <- listener(:web, options.web, []),
          {:ok, internal} <- internal(options.internal),
          {:ok, auth} <- auth(options.auth),
-         {:ok, _} <- require_listener(quic, tcp) do
+         :ok <- require_listener(quic, tcp) do
       {:ok,
        %__MODULE__{
          binary: binary,
@@ -141,11 +141,11 @@ defmodule ExMoQ.Relay.Options do
     end
   end
 
-  @spec require_listener(term(), term()) :: {:ok, {term(), term()}} | {:error, String.t()}
+  @spec require_listener(term(), term()) :: :ok | {:error, String.t()}
   defp require_listener(nil, nil),
     do: {:error, "a relay needs a :quic or a :tcp listener, both are nil"}
 
-  defp require_listener(quic, tcp), do: {:ok, {quic, tcp}}
+  defp require_listener(quic, tcp), do: :ok
 
   @spec listener(atom(), term(), keyword()) :: {:ok, term()} | {:error, String.t()}
   defp listener(key, {port, opts}, defaults) when port != nil and is_list(opts) do
