@@ -6,16 +6,10 @@ defmodule ExMoQ.Relay.Args do
   alias ExMoQ.Relay
   alias ExMoQ.Relay.Options
 
+  @typep endpoint :: :quic | :tcp | :web | :internal
+
   @spec args(Options.t()) :: [String.t()]
   def args(%Options{} = options) do
-    listen = fn flag, key ->
-      case listener(options, key) do
-        nil -> []
-        {:auto, ip} -> [flag, address(ip, 0)]
-        {port, ip} -> [flag, address(ip, port)]
-      end
-    end
-
     tls =
       with {_port, opts} <- options.quic,
            host when host != nil <- opts[:tls_generate] do
@@ -24,17 +18,28 @@ defmodule ExMoQ.Relay.Args do
         _no_certificate -> []
       end
 
-    ["--log-level", options.log_level] ++
-      listen.("--listen", :quic) ++
-      listen.("--listen-tcp-bind", :tcp) ++
-      listen.("--web-http-listen", :web) ++
-      listen.("--internal-listen", :internal) ++
-      tls ++
-      auth(options.auth) ++
+    Enum.concat([
+      ["--log-level", options.log_level],
+      listen_flag("--listen", :quic),
+      listen_flag("--listen-tcp-bind", :tcp),
+      listen_flag("--web-http-listen", :web),
+      listen_flag("--internal-listen", :internal),
+      tls,
+      auth(options.auth),
       options.args
+    ])
   end
 
-  @spec listener(Options.t(), :quic | :tcp | :web | :internal) ::
+  @spec listen_flag(Options.t(), String.t(), endpoint()) :: [String.t()]
+  defp listen_flag(%Options{} = options, flag, key) do
+    case listener(options, key) do
+      nil -> []
+      {:auto, ip} -> [flag, address(ip, 0)]
+      {port, ip} -> [flag, address(ip, port)]
+    end
+  end
+
+  @spec listener(Options.t(), endpoint()) ::
           {:auto | :inet.port_number(), :inet.ip_address()} | nil
   def listener(%Options{} = options, key) do
     case Map.fetch!(options, key) do
@@ -53,18 +58,19 @@ defmodule ExMoQ.Relay.Args do
   defp auth(nil), do: []
 
   defp auth(auth) do
-    grant = fn flag, patterns ->
-      case List.wrap(patterns) do
-        [] -> []
-        list -> [flag, Enum.join(list, ",")]
-      end
-    end
-
     if Keyword.keyword?(auth) do
-      grant.("--auth-public-subscribe", auth[:subscribe]) ++
-        grant.("--auth-public-publish", auth[:publish])
+      auth_flag("--auth-public-subscribe", auth[:subscribe]) ++
+        auth_flag("--auth-public-publish", auth[:publish])
     else
-      grant.("--auth-public", auth)
+      auth_flag("--auth-public", auth)
+    end
+  end
+
+  @spec auth_flag(String.t(), Relay.auth()) :: [String.t()]
+  defp auth_flag(flag, patterns) do
+    case List.wrap(patterns) do
+      [] -> []
+      list -> [flag, Enum.join(list, ",")]
     end
   end
 end
