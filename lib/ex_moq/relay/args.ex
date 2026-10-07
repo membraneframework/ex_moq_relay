@@ -20,10 +20,10 @@ defmodule ExMoQ.Relay.Args do
 
     Enum.concat([
       ["--log-level", options.log_level],
-      listen_flag("--listen", :quic),
-      listen_flag("--listen-tcp-bind", :tcp),
-      listen_flag("--web-http-listen", :web),
-      listen_flag("--internal-listen", :internal),
+      listen_flag(options, "--listen", :quic),
+      listen_flag(options, "--listen-tcp-bind", :tcp),
+      listen_flag(options, "--web-http-listen", :web),
+      listen_flag(options, "--internal-listen", :internal),
       tls,
       auth(options.auth),
       options.args
