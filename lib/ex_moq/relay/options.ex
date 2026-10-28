@@ -1,5 +1,6 @@
 defmodule ExMoQ.Relay.Options do
   @moduledoc false
+  # Used internally by `ExMoQ.Relay`
 
   alias ExMoQ.Relay
 
