@@ -117,7 +117,6 @@ defmodule ExMoQ.Relay do
           | {:exit_status, non_neg_integer()}
           | {:not_ready, timeout_ms :: non_neg_integer()}
 
-  @doc "A child spec for the relay; several may share a supervisor."
   @spec child_spec(t()) :: Supervisor.child_spec()
   def child_spec(%__MODULE__{} = relay) do
     %{
@@ -128,7 +127,7 @@ defmodule ExMoQ.Relay do
   end
 
   @doc """
-  Starts a relay linked to the caller and blocks until it is ready.
+  Starts a relay linked to the caller and blocks until moq-relay is ready to accept connections.
   """
   @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start_link(%__MODULE__{} = relay) do
@@ -137,7 +136,7 @@ defmodule ExMoQ.Relay do
     end
   end
 
-  @doc "Starts a relay not linked to the caller; see `start_link/1`."
+  @doc "Starts a relay not linked to the caller and blocks until moq-relay is ready to accept connections."
   @spec start(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
   def start(%__MODULE__{} = relay) do
     with {:ok, {_binary, options} = validated} <- validate(relay) do
@@ -176,7 +175,6 @@ defmodule ExMoQ.Relay do
   @spec info(GenServer.server()) :: Info.t()
   def info(relay), do: GenServer.call(relay, :info)
 
-  @doc "Stops the relay."
   @spec stop(GenServer.server(), timeout()) :: :ok
   def stop(relay, timeout \\ 5_000), do: GenServer.stop(relay, :normal, timeout)
 
