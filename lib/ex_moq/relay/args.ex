@@ -9,8 +9,8 @@ defmodule ExMoQ.Relay.Args do
   @spec args(Options.t()) :: [String.t()]
   def args(%Options{} = options) do
     tls =
-      with {_port, opts} <- options.quic,
-           host when host != nil <- opts[:tls_generate] do
+      with {_port, quic_opts} <- options.quic,
+           host when host != nil <- quic_opts[:tls_generate] do
         ["--listen-tls-generate", host]
       else
         _no_certificate -> []
@@ -41,7 +41,7 @@ defmodule ExMoQ.Relay.Args do
   def listener(%Options{} = options, endpoint) do
     case Map.fetch!(options, endpoint) do
       nil -> nil
-      {port, opts} -> {port, Keyword.get(opts, :ip, options.ip)}
+      {port, port_opts} -> {port, Keyword.get(port_opts, :ip, options.ip)}
     end
   end
 
