@@ -29,8 +29,8 @@ defmodule ExMoQ.Relay.Args do
   end
 
   @spec listen_flag(Options.t(), String.t(), Options.endpoint()) :: [String.t()]
-  defp listen_flag(%Options{} = options, flag, key) do
-    case listener(options, key) do
+  defp listen_flag(%Options{} = options, flag, endpoint) do
+    case listener(options, endpoint) do
       nil -> []
       {port, ip} -> [flag, address(ip, port)]
     end
@@ -38,8 +38,8 @@ defmodule ExMoQ.Relay.Args do
 
   @spec listener(Options.t(), Options.endpoint()) ::
           {:inet.port_number(), :inet.ip_address()} | nil
-  def listener(%Options{} = options, key) do
-    case Map.fetch!(options, key) do
+  def listener(%Options{} = options, endpoint) do
+    case Map.fetch!(options, endpoint) do
       nil -> nil
       {port, opts} -> {port, Keyword.get(opts, :ip, options.ip)}
     end
