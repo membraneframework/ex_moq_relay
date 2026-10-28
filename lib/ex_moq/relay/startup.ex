@@ -11,7 +11,9 @@ defmodule ExMoQ.Relay.Startup do
 
   @type t :: %{daemon: pid(), monitor: reference()}
 
-  @spec run(Path.t(), Options.t()) :: {:ok, t()} | {:error, term()}
+  @type error_reason :: :not_ready | {:exit_status, 0}
+
+  @spec run(Path.t(), Options.t()) :: {:ok, t()} | {:error, error_reason()}
   def run(binary, %Options{} = options) do
     deadline = System.monotonic_time(:millisecond) + options.ready_timeout
 
@@ -65,7 +67,7 @@ defmodule ExMoQ.Relay.Startup do
   end
 
   @spec await_ready(:gen_udp.socket(), reference(), integer()) ::
-          :ok | {:error, :not_ready | {:exit_status, 0}}
+          :ok | {:error, error_reason()}
   defp await_ready(socket, monitor, deadline) do
     receive do
       {:udp, ^socket, _address, _port, message} ->
