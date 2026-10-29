@@ -3,9 +3,7 @@
 [![Hex.pm](https://img.shields.io/hexpm/v/ex_moq_relay.svg)](https://hex.pm/packages/ex_moq_relay)
 [![API Docs](https://img.shields.io/badge/api-docs-yellow.svg?style=flat)](https://hexdocs.pm/ex_moq_relay)
 
-Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS
-process from Elixir, for integration tests, demos and local tooling around
-Media over QUIC.
+Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS process from Elixir.
 
 ## Installation
 
