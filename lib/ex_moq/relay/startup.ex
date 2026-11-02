@@ -24,7 +24,7 @@ defmodule ExMoQ.Relay.Startup do
 
     {:ok, _pid} =
       Task.start(fn ->
-        monitor = :erlang.monitor(:port, socket)
+        monitor = Port.monitor(socket)
 
         receive do
           {:DOWN, ^monitor, :port, ^socket, _reason} -> File.rm(path)
