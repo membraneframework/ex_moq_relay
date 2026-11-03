@@ -32,9 +32,9 @@ defmodule ExMoQ.Relay.Startup do
       end)
 
     logger_fun =
-      case options.output do
-        nil -> fn _line -> :ok end
-        fun when is_function(fun, 1) -> fun
+      case options.log do
+        :none -> fn _line -> :ok end
+        {_level, fun} -> fun
         level -> fn line -> Logger.log(level, "moq-relay: " <> String.replace_invalid(line)) end
       end
 

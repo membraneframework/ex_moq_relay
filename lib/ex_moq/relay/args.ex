@@ -17,7 +17,7 @@ defmodule ExMoQ.Relay.Args do
       end
 
     Enum.concat([
-      ["--log-level", log_level(options.log_level)],
+      ["--log-level", log_level(options.log)],
       listen_flag(options, "--listen", :quic),
       listen_flag(options, "--listen-tcp-bind", :tcp),
       listen_flag(options, "--web-http-listen", :web),
@@ -70,8 +70,9 @@ defmodule ExMoQ.Relay.Args do
     end
   end
 
-  @spec log_level(Logger.level()) :: String.t()
-  defp log_level(level) when level in [:emergency, :alert, :critical, :error], do: "error"
+  @spec log_level(Relay.log()) :: String.t()
+  defp log_level({level, _fun}), do: log_level(level)
+  defp log_level(level) when level in [:none, :emergency, :alert, :critical, :error], do: "error"
   defp log_level(:warning), do: "warn"
   defp log_level(level) when level in [:notice, :info], do: "info"
   defp log_level(:debug), do: "debug"

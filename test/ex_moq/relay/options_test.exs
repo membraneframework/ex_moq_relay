@@ -16,8 +16,11 @@ defmodule ExMoQ.Relay.OptionsTest do
     assert {:error, {:validation_failed, message}} = Relay.start(relay!(tcp: :auto))
     assert message =~ ~r/:tcp must be a port or \{port, opts\}, got: :auto/
 
-    assert {:error, {:validation_failed, message}} = Relay.start_link(relay!(log_level: "WARN"))
-    assert message =~ ~r/:log_level must be a Logger level/
+    assert {:error, {:validation_failed, message}} = Relay.start_link(relay!(log: "WARN"))
+    assert message =~ ~r/:log must be a Logger level/
+
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(log: nil))
+    assert message =~ ~r/or :none, got: nil/
 
     assert {:error, {:validation_failed, message}} = Relay.start(relay!(auth: [subscibe: "**"]))
     assert message =~ ~r/unknown keys \[:subscibe\]/
@@ -65,7 +68,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                relay!(
                  quic: nil,
                  tcp: 1,
-                 log_level: :info,
+                 log: {:info, &IO.puts/1},
                  auth: ["anon/**", "demo/**"],
                  args: ["--stats-enabled"]
                )
@@ -78,6 +81,11 @@ defmodule ExMoQ.Relay.OptionsTest do
                "anon/**,demo/**",
                "--stats-enabled"
              ]
+    end
+
+    test "a relay whose log is discarded prints as little as it can" do
+      assert Relay.args(relay!(quic: nil, tcp: 1, log: :none)) ==
+               ["--log-level", "error", "--listen-tcp-bind", "127.0.0.1:1", "--auth-public", "**"]
     end
 
     test "the web listener may share the QUIC port" do

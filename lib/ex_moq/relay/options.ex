@@ -13,9 +13,8 @@ defmodule ExMoQ.Relay.Options do
 
   @type t :: %__MODULE__{
           auth: Relay.auth() | nil,
-          log_level: Logger.level(),
+          log: Relay.log(),
           args: [String.t()],
-          output: Relay.output() | nil,
           ready_timeout: non_neg_integer(),
           name: GenServer.name() | nil,
           quic: quic_listener() | nil,
@@ -30,9 +29,8 @@ defmodule ExMoQ.Relay.Options do
     :web,
     :internal,
     :auth,
-    :log_level,
+    :log,
     :args,
-    :output,
     :ready_timeout,
     :name
   ]
@@ -41,8 +39,7 @@ defmodule ExMoQ.Relay.Options do
   @spec validate(Relay.options()) :: {:ok, t()} | {:error, String.t()}
   def validate(options) do
     with {:ok, options} <- opts(options, @enforce_keys),
-         {:ok, output} <- output(options[:output]),
-         {:ok, log_level} <- log_level(options[:log_level]),
+         {:ok, log} <- log(options[:log]),
          {:ok, quic} <- listener(:quic, options[:quic], tls_generate: "localhost"),
          {:ok, tcp} <- listener(:tcp, options[:tcp], []),
          {:ok, web} <- listener(:web, options[:web], []),
@@ -56,9 +53,8 @@ defmodule ExMoQ.Relay.Options do
          web: web,
          internal: internal,
          auth: auth,
-         log_level: log_level,
+         log: log,
          args: options[:args],
-         output: output,
          ready_timeout: options[:ready_timeout],
          name: options[:name]
        }}
@@ -73,19 +69,13 @@ defmodule ExMoQ.Relay.Options do
     end
   end
 
-  @spec output(term()) :: {:ok, Relay.output() | nil} | {:error, String.t()}
-  defp output(output) when output == nil or is_function(output, 1), do: {:ok, output}
-  defp output(level) when level in @levels, do: {:ok, level}
+  @spec log(term()) :: {:ok, Relay.log()} | {:error, String.t()}
+  defp log(level) when level in @levels or level == :none, do: {:ok, level}
+  defp log({level, fun} = log) when level in @levels and is_function(fun, 1), do: {:ok, log}
 
-  defp output(other) do
-    {:error, ":output must be a Logger level, a 1-arity function or nil, got: #{inspect(other)}"}
-  end
-
-  @spec log_level(term()) :: {:ok, Logger.level()} | {:error, String.t()}
-  defp log_level(level) when level in @levels, do: {:ok, level}
-
-  defp log_level(other) do
-    {:error, ":log_level must be a Logger level, got: #{inspect(other)}"}
+  defp log(other) do
+    {:error,
+     ":log must be a Logger level, {level, 1-arity function} or :none, got: #{inspect(other)}"}
   end
 
   @spec auth(term()) :: {:ok, Relay.auth() | nil} | {:error, String.t()}

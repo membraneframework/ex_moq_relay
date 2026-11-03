@@ -11,10 +11,18 @@ defmodule ExMoQ.Testing.Relay do
       stop_supervised!(:relay)
   """
 
-  @doc "Options for a test relay: TCP only, on a port that is free as they are built."
+  @doc """
+  Options for a test relay: TCP only, on a port that is free as they are built.
+  """
   @spec options(Path.t() | nil) :: ExMoQ.Relay.options()
   def options(binary \\ nil) do
-    options = [tcp: free_port(), quic: nil, log_level: :info, output: :debug]
+    log_level =
+      case Logger.level() do
+        :all -> :debug
+        level -> level
+      end
+
+    options = [tcp: free_port(), quic: nil, log: log_level]
     if binary, do: [{:binary, binary} | options], else: options
   end
 

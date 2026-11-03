@@ -25,10 +25,8 @@ defmodule ExMoQ.Relay do
       It may share its port number with `:quic`.
     * `:internal` - the HTTP listener for operators (none by default).
     * `:auth` - see `t:auth/0` (default `"**"`), or `nil` for none.
-    * `:log_level` - the relay's log level (default `:warning`).
+    * `:log` - logging behaviour, see `t:log/0` (default `:warning`).
     * `:args` - list of extra command-line arguments (none by default).
-    * `:output` - where the relay's output lines go: a `Logger` level to log them at,
-    a 1-arity function that gets called with each, or `nil` to discard them (default `:info`).
     * `:ready_timeout` - milliseconds to wait for readiness (default `15_000`).
     * `:name` - a name to register the relay's process under (none by default).
 
@@ -44,18 +42,16 @@ defmodule ExMoQ.Relay do
           | {:web, listener()}
           | {:internal, listener()}
           | {:auth, auth() | nil}
-          | {:log_level, Logger.level()}
+          | {:log, log()}
           | {:args, [String.t()]}
-          | {:output, output() | nil}
           | {:ready_timeout, non_neg_integer()}
           | {:name, GenServer.name()}
 
   @defaults [
     quic: 4443,
     auth: "**",
-    log_level: :warning,
+    log: :warning,
     args: [],
-    output: :info,
     ready_timeout: 15_000
   ]
 
@@ -85,10 +81,13 @@ defmodule ExMoQ.Relay do
   @type patterns :: String.t() | [String.t(), ...]
 
   @typedoc """
-  Where the relay's output lines go: a `Logger` level to log them at,
-  or a 1-arity function to call with each.
+  The logging behaviour for the relay process.
+
+  * A `Logger` level.
+  * `{level, fun}`, where `fun` is called on each line.
+  * `:none` to discard.
   """
-  @type output :: Logger.level() | (String.t() -> any())
+  @type log :: Logger.level() | {Logger.level(), (String.t() -> any())} | :none
 
   @typedoc "Why the relay did not start."
   @type start_error ::
