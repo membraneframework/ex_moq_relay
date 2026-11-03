@@ -80,28 +80,25 @@ defmodule ExMoQ.Relay.OptionsTest do
              ]
     end
 
-    test "every listener binds to :ip, and the web one may share the QUIC port" do
-      assert Relay.args(relay!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443)) == [
-               "--log-level",
-               "warn",
-               "--listen",
-               "0.0.0.0:4443",
-               "--web-http-listen",
-               "0.0.0.0:4443",
-               "--listen-tls-generate",
-               "localhost",
-               "--auth-public",
-               "**"
-             ]
-
-      assert Relay.args(relay!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1)) ==
-               ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
+    test "the web listener may share the QUIC port" do
+      assert Relay.args(relay!(quic: {4443, ip: {0, 0, 0, 0}}, web: {4443, ip: {0, 0, 0, 0}})) ==
+               [
+                 "--log-level",
+                 "warn",
+                 "--listen",
+                 "0.0.0.0:4443",
+                 "--web-http-listen",
+                 "0.0.0.0:4443",
+                 "--listen-tls-generate",
+                 "localhost",
+                 "--auth-public",
+                 "**"
+               ]
     end
 
-    test "a listener with an :ip of its own binds to it" do
+    test "a listener binds to its :ip, or to 127.0.0.1 without one" do
       options =
         relay!(
-          ip: {0, 0, 0, 0},
           quic: {4443, ip: {192, 0, 2, 1}},
           tcp: {4444, ip: {0, 0, 0, 0, 0, 0, 0, 1}},
           web: {4443, ip: {127, 0, 0, 1}},
@@ -118,7 +115,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                "--web-http-listen",
                "127.0.0.1:4443",
                "--internal-listen",
-               "0.0.0.0:9101",
+               "127.0.0.1:9101",
                "--listen-tls-generate",
                "localhost",
                "--auth-public",

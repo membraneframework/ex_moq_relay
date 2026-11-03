@@ -15,9 +15,6 @@ defmodule ExMoQ.Relay do
   The options of a relay to start.
 
     * `:binary` - path to the relay, otherwise resolved with `find_binary/1`.
-    * `:ip` - address the listeners bind to (default `{127, 0, 0, 1}`).
-      A listener binds to one of its own as `{port, ip: ip}`,
-      like `web: {8080, ip: {127, 0, 0, 1}}` next to a public `:quic`.
     * `:quic` - the QUIC listener (default `4443`), or `nil` for none.
       The certificate is generated for `"localhost"`;
       `{port, tls_generate: host}` names another host,
@@ -34,12 +31,14 @@ defmodule ExMoQ.Relay do
     a 1-arity function that gets called with each, or `nil` to discard them (default `:info`).
     * `:ready_timeout` - milliseconds to wait for readiness (default `15_000`).
     * `:name` - a name to register the relay's process under (none by default).
+
+  A listener given as a port binds to `127.0.0.1`;
+  `{port, ip: ip}` binds it to `ip`, like `quic: {4443, ip: {0, 0, 0, 0}}`.
   """
   @type options :: [option()]
 
   @type option ::
           {:binary, Path.t()}
-          | {:ip, :inet.ip_address()}
           | {:quic, quic_listener() | nil}
           | {:tcp, listener()}
           | {:web, listener()}
@@ -52,7 +51,6 @@ defmodule ExMoQ.Relay do
           | {:name, GenServer.name()}
 
   @defaults [
-    ip: {127, 0, 0, 1},
     quic: 4443,
     auth: "**",
     log_level: :warning,

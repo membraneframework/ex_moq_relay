@@ -12,7 +12,6 @@ defmodule ExMoQ.Relay.Options do
   @type quic_listener :: {:inet.port_number(), Relay.quic_listener_opts()}
 
   @type t :: %__MODULE__{
-          ip: :inet.ip_address(),
           auth: Relay.auth() | nil,
           log_level: Logger.level(),
           args: [String.t()],
@@ -26,7 +25,6 @@ defmodule ExMoQ.Relay.Options do
         }
 
   @enforce_keys [
-    :ip,
     :quic,
     :tcp,
     :web,
@@ -53,7 +51,6 @@ defmodule ExMoQ.Relay.Options do
          :ok <- require_listener(quic, tcp) do
       {:ok,
        %__MODULE__{
-         ip: options[:ip],
          quic: quic,
          tcp: tcp,
          web: web,
@@ -124,7 +121,7 @@ defmodule ExMoQ.Relay.Options do
 
   defp listener(key, {port, opts}, defaults) when is_list(opts) do
     with {:ok, port} <- port(key, port),
-         {:ok, opts} <- opts(opts, [:ip | defaults]) do
+         {:ok, opts} <- opts(opts, [{:ip, {127, 0, 0, 1}} | defaults]) do
       {:ok, {port, opts}}
     end
   end

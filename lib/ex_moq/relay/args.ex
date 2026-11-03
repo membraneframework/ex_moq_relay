@@ -41,7 +41,7 @@ defmodule ExMoQ.Relay.Args do
   def listener(%Options{} = options, endpoint) do
     case Map.fetch!(options, endpoint) do
       nil -> nil
-      {port, port_opts} -> {port, Keyword.get(port_opts, :ip, options.ip)}
+      {port, port_opts} -> {port, Keyword.fetch!(port_opts, :ip)}
     end
   end
 
