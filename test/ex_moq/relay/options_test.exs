@@ -3,8 +3,8 @@ defmodule ExMoQ.Relay.OptionsTest do
 
   alias ExMoQ.Relay
 
-  @spec relay!(Keyword.t()) :: Relay.t()
-  defp relay!(fields), do: struct!(Relay, [binary: "/bin/sh"] ++ fields)
+  @spec relay!(Relay.options()) :: Relay.options()
+  defp relay!(opts), do: Keyword.merge([binary: "/bin/sh"], opts)
 
   test "options that fail validation are rejected before the relay is started" do
     assert {:error, {:binary_not_found, "/nonexistent/moq-relay"}} =
@@ -14,7 +14,7 @@ defmodule ExMoQ.Relay.OptionsTest do
     assert message =~ ~r/needs a :quic or a :tcp listener/
 
     assert {:error, {:validation_failed, message}} = Relay.start(relay!(tcp: :auto))
-    assert message =~ ~r/:tcp must be a port, \{port, opts\} or nil, got: :auto/
+    assert message =~ ~r/:tcp must be a port or \{port, opts\}, got: :auto/
 
     assert {:error, {:validation_failed, message}} = Relay.start_link(relay!(log_level: "WARN"))
     assert message =~ ~r/:log_level must be a Logger level/
@@ -29,12 +29,20 @@ defmodule ExMoQ.Relay.OptionsTest do
              Relay.start(relay!(web: {4443, host: "localhost"}))
 
     assert message =~ ~r/unknown keys \[:host\]/
+
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(qiuc: 4443))
+    assert message =~ ~r/unknown keys \[:qiuc\]/
+
+    assert {:error, {:validation_failed, message}} = Relay.start(relay!(binary: 123))
+    assert message =~ ~r/:binary must be a path, got: 123/
   end
 
   describe "args/1" do
     test "renders the listeners that are asked for, with or without the binary" do
-      %Relay{} = relay = relay!(quic: 4443, tcp: 4444, internal: 9101)
-      assert Relay.args(%{relay | binary: "/nonexistent/moq-relay"}) == Relay.args(relay)
+      relay = relay!(quic: 4443, tcp: 4444, internal: 9101)
+
+      assert Relay.args(Keyword.put(relay, :binary, "/nonexistent/moq-relay")) ==
+               Relay.args(relay)
 
       assert Relay.args(relay) == [
                "--log-level",
@@ -57,7 +65,6 @@ defmodule ExMoQ.Relay.OptionsTest do
                relay!(
                  quic: nil,
                  tcp: 1,
-                 internal: nil,
                  log_level: :info,
                  auth: ["anon/**", "demo/**"],
                  args: ["--stats-enabled"]
@@ -74,7 +81,7 @@ defmodule ExMoQ.Relay.OptionsTest do
     end
 
     test "every listener binds to :ip, and the web one may share the QUIC port" do
-      assert Relay.args(relay!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443, internal: nil)) == [
+      assert Relay.args(relay!(ip: {0, 0, 0, 0}, quic: 4443, web: 4443)) == [
                "--log-level",
                "warn",
                "--listen",
@@ -87,7 +94,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                "**"
              ]
 
-      assert Relay.args(relay!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1, internal: nil)) ==
+      assert Relay.args(relay!(ip: {0, 0, 0, 0, 0, 0, 0, 1}, quic: nil, tcp: 1)) ==
                ["--log-level", "warn", "--listen-tcp-bind", "[::1]:1", "--auth-public", "**"]
     end
 
@@ -143,16 +150,14 @@ defmodule ExMoQ.Relay.OptionsTest do
     end
 
     test "auth: nil grants nothing; {:url, url} admits through a server" do
-      assert Relay.args(relay!(quic: nil, tcp: 1, internal: nil, auth: nil)) == [
+      assert Relay.args(relay!(quic: nil, tcp: 1, auth: nil)) == [
                "--log-level",
                "warn",
                "--listen-tcp-bind",
                "127.0.0.1:1"
              ]
 
-      assert Relay.args(
-               relay!(quic: nil, tcp: 1, internal: nil, auth: {:url, "unix:///tmp/auth.sock"})
-             ) == [
+      assert Relay.args(relay!(quic: nil, tcp: 1, auth: {:url, "unix:///tmp/auth.sock"})) == [
                "--log-level",
                "warn",
                "--listen-tcp-bind",
@@ -163,7 +168,7 @@ defmodule ExMoQ.Relay.OptionsTest do
     end
 
     test "the QUIC listener carries the host of its generated certificate, or none" do
-      assert Relay.args(relay!(quic: {4443, tls_generate: "relay.test"}, internal: nil)) ==
+      assert Relay.args(relay!(quic: {4443, tls_generate: "relay.test"})) ==
                [
                  "--log-level",
                  "warn",
@@ -175,7 +180,7 @@ defmodule ExMoQ.Relay.OptionsTest do
                  "**"
                ]
 
-      assert Relay.args(relay!(quic: {4443, tls_generate: nil}, internal: nil)) ==
+      assert Relay.args(relay!(quic: {4443, tls_generate: nil})) ==
                ["--log-level", "warn", "--listen", "127.0.0.1:4443", "--auth-public", "**"]
     end
   end

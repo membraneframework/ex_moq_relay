@@ -1,89 +1,73 @@
 defmodule ExMoQ.Relay do
   @moduledoc """
-  Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary as a supervised OS
-  process.
+  Runs a [moq-relay](https://doc.moq.dev/bin/relay) binary
+  as a supervised OS process.
 
-  The struct holds the options of a relay to start (see
-  [`%ExMoQ.Relay{}`](`__struct__/0`)):
-
-      {:ok, relay} = ExMoQ.Relay.start_link(%ExMoQ.Relay{quic: 4443})
+      {:ok, relay} = ExMoQ.Relay.start_link(quic: 4443)
       ExMoQ.Relay.info(relay).quic  #=> {"https://127.0.0.1:4443", :generated}
-
-  The relay stops with the process `start_link/1` returns, and that process
-  exits with `{:exit_status, status}` when the relay exits on its own. Under
-  a supervisor:
-
-      {ExMoQ.Relay, %ExMoQ.Relay{quic: 4443, web: 4443, name: MyApp.Relay}}
   """
 
   use GenServer
 
   alias ExMoQ.Relay.{Args, Info, Options, Startup}
 
-  @doc """
-  The options of a relay to start.
-    * `:binary` - path to the relay; when `nil` (default), see `find_binary/1`.
-    * `:ip` - address the listeners bind to (default `{127, 0, 0, 1}`). A
-      listener binds to one of its own as `{port, ip: ip}`, like
-      `web: {8080, ip: {127, 0, 0, 1}}` next to a public `:quic`.
-    * `:quic` - the QUIC listener (default `4443`). Its certificate is
-      generated for `"localhost"`; `{port, tls_generate: host}` names another
-      host, and `{port, tls_generate: nil}` generates none, for one passed in
-      `:args`.
-    * `:tcp` - a plaintext TCP listener (default `nil`).
-    * `:web` - the HTTP listener serving `moq-relay`
-      [endpoints](https://doc.moq.dev/bin/relay/http.html) (default `nil`).
-      It may share its port number with `:quic`.
-    * `:internal` - the HTTP listener for operators (default `nil`).
-    * `:auth` - see `t:auth/0`.
-    * `:log_level` - the relay's log level (default `:warning`).
-    * `:args` - extra command-line arguments (default `[]`).
-    * `:output` - where the relay's output lines go (default `:info`), see
-      `t:output/0`.
-    * `:ready_timeout` - milliseconds to wait for readiness (default `15_000`).
-    * `:name` - a name to register the relay's process under (default `nil`).
-  """
-  defstruct binary: nil,
-            ip: {127, 0, 0, 1},
-            quic: 4443,
-            tcp: nil,
-            web: nil,
-            internal: nil,
-            auth: "**",
-            log_level: :warning,
-            args: [],
-            output: :info,
-            ready_timeout: 15_000,
-            name: nil
-
   @typedoc """
-  Options of a relay to start.
+  The options of a relay to start.
 
-  See [`%ExMoQ.Relay{}`](`__struct__/0`) for information about each field.
+    * `:binary` - path to the relay, otherwise resolved with `find_binary/1`.
+    * `:ip` - address the listeners bind to (default `{127, 0, 0, 1}`).
+      A listener binds to one of its own as `{port, ip: ip}`,
+      like `web: {8080, ip: {127, 0, 0, 1}}` next to a public `:quic`.
+    * `:quic` - the QUIC listener (default `4443`), or `nil` for none.
+      The certificate is generated for `"localhost"`;
+      `{port, tls_generate: host}` names another host,
+      and `{port, tls_generate: nil}` generates none, for one passed in `:args`.
+    * `:tcp` - a plaintext TCP listener (none by default).
+    * `:web` - the HTTP listener serving `moq-relay`
+      [endpoints](https://doc.moq.dev/bin/relay/http.html) (none by default).
+      It may share its port number with `:quic`.
+    * `:internal` - the HTTP listener for operators (none by default).
+    * `:auth` - see `t:auth/0` (default `"**"`), or `nil` for none.
+    * `:log_level` - the relay's log level (default `:warning`).
+    * `:args` - list of extra command-line arguments (none by default).
+    * `:output` - where the relay's output lines go: a `Logger` level to log them at,
+    a 1-arity function that gets called with each, or `nil` to discard them (default `:info`).
+    * `:ready_timeout` - milliseconds to wait for readiness (default `15_000`).
+    * `:name` - a name to register the relay's process under (none by default).
   """
-  @type t :: %__MODULE__{
-          binary: Path.t() | nil,
-          ip: :inet.ip_address(),
-          quic: quic_listener(),
-          tcp: listener(),
-          web: listener(),
-          internal: listener(),
-          auth: auth(),
-          log_level: Logger.level(),
-          args: [String.t()],
-          output: output(),
-          ready_timeout: non_neg_integer(),
-          name: GenServer.name() | nil
-        }
+  @type options :: [option()]
 
-  @typedoc "A listener: a port, `{port, opts}`, or `nil` for none."
-  @type listener :: :inet.port_number() | {:inet.port_number(), [{:ip, :inet.ip_address()}]} | nil
+  @type option ::
+          {:binary, Path.t()}
+          | {:ip, :inet.ip_address()}
+          | {:quic, quic_listener() | nil}
+          | {:tcp, listener()}
+          | {:web, listener()}
+          | {:internal, listener()}
+          | {:auth, auth() | nil}
+          | {:log_level, Logger.level()}
+          | {:args, [String.t()]}
+          | {:output, output() | nil}
+          | {:ready_timeout, non_neg_integer()}
+          | {:name, GenServer.name()}
 
-  @typedoc "The QUIC listener: a `t:listener/0` that also takes `:tls_generate`."
-  @type quic_listener ::
-          :inet.port_number()
-          | {:inet.port_number(), [{:ip, :inet.ip_address()} | {:tls_generate, String.t() | nil}]}
-          | nil
+  @defaults [
+    ip: {127, 0, 0, 1},
+    quic: 4443,
+    auth: "**",
+    log_level: :warning,
+    args: [],
+    output: :info,
+    ready_timeout: 15_000
+  ]
+
+  @type listener :: :inet.port_number() | {:inet.port_number(), listener_opts()}
+
+  @type listener_opts :: [{:ip, :inet.ip_address()}]
+
+  @type quic_listener :: :inet.port_number() | {:inet.port_number(), quic_listener_opts()}
+
+  @type quic_listener_opts :: [{:ip, :inet.ip_address()} | {:tls_generate, String.t() | nil}]
 
   @typedoc """
   How sessions are admitted.
@@ -91,24 +75,22 @@ defmodule ExMoQ.Relay do
   * Path patterns for anonymous access (`"**"` is everything)
   * `[subscribe: patterns, publish: patterns]` to grant the two
   apart (`[subscribe: "**"]` lets anyone subscribe and no one publish)
-  * `{:url, url}` for an auth server the relay POSTs to (`http://`,
-  `https://`, or `unix://`, see [Authentication](https://doc.moq.dev/bin/relay/auth))
-  * `nil` for none, leaving auth to `:args`
+  * `{:url, url}` for an auth server the relay POSTs to,
+  see https://doc.moq.dev/bin/relay/auth
   """
   @type auth ::
           patterns()
           | [{:subscribe, patterns()} | {:publish, patterns()}, ...]
           | {:url, String.t()}
-          | nil
 
   @typedoc "Path patterns: one, or a list."
   @type patterns :: String.t() | [String.t(), ...]
 
   @typedoc """
-  Where the relay's output lines go: a `Logger` level to log them at, a
-  1-arity function to call with each, or `nil` to drop them.
+  Where the relay's output lines go: a `Logger` level to log them at,
+  or a 1-arity function to call with each.
   """
-  @type output :: Logger.level() | (String.t() -> any()) | nil
+  @type output :: Logger.level() | (String.t() -> any())
 
   @typedoc "Why the relay did not start."
   @type start_error ::
@@ -117,11 +99,11 @@ defmodule ExMoQ.Relay do
           | {:exit_status, non_neg_integer()}
           | {:not_ready, timeout_ms :: non_neg_integer()}
 
-  @spec child_spec(t()) :: Supervisor.child_spec()
-  def child_spec(%__MODULE__{} = relay) do
+  @spec child_spec(options()) :: Supervisor.child_spec()
+  def child_spec(opts) when is_list(opts) do
     %{
-      id: {__MODULE__, relay.name || make_ref()},
-      start: {__MODULE__, :start_link, [relay]},
+      id: {__MODULE__, Keyword.get(opts, :name, make_ref())},
+      start: {__MODULE__, :start_link, [opts]},
       type: :worker
     }
   end
@@ -129,27 +111,30 @@ defmodule ExMoQ.Relay do
   @doc """
   Starts a relay linked to the caller and blocks until moq-relay is ready to accept connections.
   """
-  @spec start_link(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  def start_link(%__MODULE__{} = relay) do
-    with {:ok, {_binary, options} = validated} <- validate(relay) do
+  @spec start_link(options()) ::
+          {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start_link(opts \\ []) when is_list(opts) do
+    with {:ok, {_binary, options} = validated} <- validate(opts) do
       GenServer.start_link(__MODULE__, validated, name: options.name)
     end
   end
 
   @doc "Starts a relay not linked to the caller and blocks until moq-relay is ready to accept connections."
-  @spec start(t()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
-  def start(%__MODULE__{} = relay) do
-    with {:ok, {_binary, options} = validated} <- validate(relay) do
+  @spec start(options()) :: {:ok, pid()} | {:error, start_error() | {:already_started, pid()}}
+  def start(opts \\ []) when is_list(opts) do
+    with {:ok, {_binary, options} = validated} <- validate(opts) do
       GenServer.start(__MODULE__, validated, name: options.name)
     end
   end
 
-  @spec validate(t()) ::
+  @spec validate(options()) ::
           {:ok, {Path.t(), Options.t()}}
           | {:error, {:validation_failed, String.t()} | {:binary_not_found, Path.t()}}
-  defp validate(%__MODULE__{} = relay) do
-    with {:ok, options} <- Options.validate(relay),
-         {:ok, binary} <- resolve_binary(relay.binary) do
+  defp validate(opts) do
+    {binary, opts} = Keyword.pop(opts, :binary)
+
+    with {:ok, options} <- @defaults |> Keyword.merge(opts) |> Options.validate(),
+         {:ok, binary} <- resolve_binary(binary) do
       {:ok, {binary, options}}
     else
       {:error, message} when is_binary(message) -> {:error, {:validation_failed, message}}
@@ -157,8 +142,11 @@ defmodule ExMoQ.Relay do
     end
   end
 
-  @spec resolve_binary(Path.t() | nil) ::
-          {:ok, Path.t()} | {:error, {:binary_not_found, Path.t()}}
+  @spec resolve_binary(term()) ::
+          {:ok, Path.t()} | {:error, String.t() | {:binary_not_found, Path.t()}}
+  defp resolve_binary(binary) when not is_nil(binary) and not is_binary(binary),
+    do: {:error, ":binary must be a path, got: #{inspect(binary)}"}
+
   defp resolve_binary(binary) do
     name = binary_name(binary)
 
@@ -199,10 +187,13 @@ defmodule ExMoQ.Relay do
   The arguments the relay binary is run with.
   Raises `ArgumentError` when options fail validation.
   """
-  @spec args(t()) :: [String.t()]
-  def args(%__MODULE__{} = relay), do: relay |> Options.validate!() |> Args.args()
-
-  ## Server
+  @spec args(options()) :: [String.t()]
+  def args(opts) when is_list(opts) do
+    @defaults
+    |> Keyword.merge(Keyword.delete(opts, :binary))
+    |> Options.validate!()
+    |> Args.args()
+  end
 
   @impl true
   def init({binary, %Options{} = options}) do

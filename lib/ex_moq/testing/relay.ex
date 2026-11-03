@@ -12,9 +12,10 @@ defmodule ExMoQ.Testing.Relay do
   """
 
   @doc "Options for a test relay: TCP only, on a port that is free as they are built."
-  @spec options(Path.t() | nil) :: ExMoQ.Relay.t()
+  @spec options(Path.t() | nil) :: ExMoQ.Relay.options()
   def options(binary \\ nil) do
-    %ExMoQ.Relay{binary: binary, tcp: free_port(), quic: nil, log_level: :info, output: :debug}
+    options = [tcp: free_port(), quic: nil, log_level: :info, output: :debug]
+    if binary, do: [{:binary, binary} | options], else: options
   end
 
   @doc """

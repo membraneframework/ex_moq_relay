@@ -49,9 +49,9 @@ defmodule ExMoQ.Relay.Args do
   def address(ip, port) when tuple_size(ip) == 8, do: "[#{:inet.ntoa(ip)}]:#{port}"
   def address(ip, port), do: "#{:inet.ntoa(ip)}:#{port}"
 
-  @spec auth(Relay.auth()) :: [String.t()]
-  defp auth({:url, url}), do: ["--auth-url", url]
+  @spec auth(Relay.auth() | nil) :: [String.t()]
   defp auth(nil), do: []
+  defp auth({:url, url}), do: ["--auth-url", url]
 
   defp auth(auth) do
     if Keyword.keyword?(auth) do
@@ -62,7 +62,7 @@ defmodule ExMoQ.Relay.Args do
     end
   end
 
-  @spec auth_flag(String.t(), Relay.auth()) :: [String.t()]
+  @spec auth_flag(String.t(), Relay.patterns() | nil) :: [String.t()]
   defp auth_flag(flag, patterns) do
     case List.wrap(patterns) do
       [] -> []

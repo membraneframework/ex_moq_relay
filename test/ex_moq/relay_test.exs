@@ -26,7 +26,7 @@ defmodule ExMoQ.RelayTest do
         """)
 
       me = self()
-      options = %Relay{binary: binary, output: &send(me, &1)}
+      options = [binary: binary, output: &send(me, &1)]
 
       assert {:error, {:exit_status, 1}} = Relay.start(options)
       assert_receive path when is_binary(path)
@@ -43,7 +43,7 @@ defmodule ExMoQ.RelayTest do
         exit 0
         """)
 
-      assert {:error, {:exit_status, 0}} = Relay.start(%Relay{binary: binary, output: nil})
+      assert {:error, {:exit_status, 0}} = Relay.start(binary: binary, output: nil)
     end
 
     test "that exits cleanly once ready stops with exit status 0", %{tmp_dir: dir} do
@@ -60,7 +60,7 @@ defmodule ExMoQ.RelayTest do
         :gen_udp.close(socket)
       end
 
-      {:ok, relay} = Relay.start(%Relay{binary: binary, output: ready})
+      {:ok, relay} = Relay.start(binary: binary, output: ready)
       ref = Process.monitor(relay)
 
       assert_receive {:DOWN, ^ref, :process, ^relay, {:exit_status, 0}}, 1_000
@@ -71,7 +71,7 @@ defmodule ExMoQ.RelayTest do
 
       log =
         capture_log(fn ->
-          assert {:error, {:exit_status, 1}} = Relay.start(%Relay{binary: binary})
+          assert {:error, {:exit_status, 1}} = Relay.start(binary: binary)
         end)
 
       assert log =~ "[info] moq-relay: path \uFFFD"
@@ -85,7 +85,7 @@ defmodule ExMoQ.RelayTest do
     """
 
     test "that never reports readiness is stopped, and exits the caller", %{tmp_dir: dir} do
-      options = %Relay{binary: script!(dir, "silent", @silent), ready_timeout: 300}
+      options = [binary: script!(dir, "silent", @silent), ready_timeout: 300]
 
       {caller, ref} = spawn_monitor(fn -> Relay.start_link(options) end)
       assert_receive {:DOWN, ^ref, :process, ^caller, {:not_ready, 300}}, 1_000
@@ -105,7 +105,7 @@ defmodule ExMoQ.RelayTest do
         exit 1
         """)
 
-      options = %Relay{binary: binary, output: nil}
+      options = [binary: binary, output: nil]
 
       log = capture_log(fn -> assert {:error, {:exit_status, 1}} = Relay.start(options) end)
       refute log =~ "hello"
@@ -118,14 +118,14 @@ defmodule ExMoQ.RelayTest do
     test "starts with every listener and stops" do
       [quic, tcp, internal] = Enum.map(1..3, fn _n -> free_port() end)
 
-      options = %Relay{
+      options = [
         quic: quic,
         tcp: tcp,
         web: {quic, ip: {0, 0, 0, 0}},
         internal: internal,
         name: __MODULE__.Relay,
         output: nil
-      }
+      ]
 
       {:ok, relay} = Relay.start_link(options)
 
@@ -160,18 +160,17 @@ defmodule ExMoQ.RelayTest do
 
       me = self()
 
-      options =
-        %Relay{quic: nil, tcp: free_port(), log_level: :error, output: &send(me, {:line, &1})}
+      options = [quic: nil, tcp: free_port(), log_level: :error, output: &send(me, {:line, &1})]
 
       start_supervised!({Relay, options})
       refute_receive {:line, _line}, 500
     end
 
     test "a relay that binds its listeners but cannot authenticate is not ready" do
-      options = %Relay{quic: nil, tcp: free_port(), auth: nil, output: nil}
+      options = [quic: nil, tcp: free_port(), auth: nil, output: nil]
       assert {:error, {:exit_status, 1}} = Relay.start(options)
 
-      options = %Relay{options | auth: [subscribe: "**"]}
+      options = Keyword.put(options, :auth, subscribe: "**")
       assert %Info{} = Relay.info(start_supervised!({Relay, options}))
     end
   end
