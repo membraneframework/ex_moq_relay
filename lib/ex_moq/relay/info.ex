@@ -13,9 +13,8 @@ defmodule ExMoQ.Relay.Info do
   It contains these fields, one per listener of `ExMoQ.Relay`, each `nil`
   when that listener is off:
 
-    * `:quic` - `{url, tls}`: the `https://host:port` of the QUIC listener
-      (append the path yourself), and its certificate, `:generated` if
-      self-signed by the relay or `:provided` if passed in `:args`.
+    * `:quic` - the `https://host:port` of the QUIC listener
+      (append the path yourself).
     * `:tcp` - the `tcp://host:port` of the TCP listener.
     * `:web` - the `http://host:port` of the web listener.
     * `:internal` - the `http://host:port` of the internal listener.
@@ -32,7 +31,7 @@ defmodule ExMoQ.Relay.Info do
   See [`%ExMoQ.Relay.Info{}`](`__struct__/0`) for information about each field.
   """
   @type t :: %__MODULE__{
-          quic: {String.t(), :generated | :provided} | nil,
+          quic: String.t() | nil,
           tcp: String.t() | nil,
           web: String.t() | nil,
           internal: String.t() | nil
@@ -42,19 +41,11 @@ defmodule ExMoQ.Relay.Info do
   @spec new(Options.t()) :: t()
   def new(%Options{} = options) do
     %__MODULE__{
-      quic: quic(options),
+      quic: url(options, "https", :quic),
       tcp: url(options, "tcp", :tcp),
       web: url(options, "http", :web),
       internal: url(options, "http", :internal)
     }
-  end
-
-  @spec quic(Options.t()) :: {String.t(), :generated | :provided} | nil
-  defp quic(%Options{quic: nil}), do: nil
-
-  defp quic(%Options{quic: {_port, opts}} = options) do
-    tls = if opts[:tls_generate], do: :generated, else: :provided
-    {url(options, "https", :quic), tls}
   end
 
   @spec url(Options.t(), String.t(), Options.endpoint()) :: String.t() | nil

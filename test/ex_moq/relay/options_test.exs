@@ -172,21 +172,38 @@ defmodule ExMoQ.Relay.OptionsTest do
              ]
     end
 
-    test "the QUIC listener carries the host of its generated certificate, or none" do
-      assert Relay.args(relay!(quic: {4443, tls_generate: "relay.test"})) ==
+    @tag :tmp_dir
+    test "the QUIC listener carries the hosts of its generated certificate, or its files", %{
+      tmp_dir: dir
+    } do
+      assert Relay.args(relay!(quic: {4443, tls: {:generate, ["localhost", "relay.test"]}})) ==
                [
                  "--log-level",
                  "warn",
                  "--listen",
                  "127.0.0.1:4443",
                  "--listen-tls-generate",
-                 "relay.test",
+                 "localhost,relay.test",
                  "--auth-public",
                  "**"
                ]
 
-      assert Relay.args(relay!(quic: {4443, tls_generate: nil})) ==
-               ["--log-level", "warn", "--listen", "127.0.0.1:4443", "--auth-public", "**"]
+      [cert, key] = Enum.map(["cert.pem", "key.pem"], &Path.join(dir, &1))
+      Enum.each([cert, key], &File.touch!/1)
+
+      assert Relay.args(relay!(quic: {4443, tls: {:files, cert, key}})) ==
+               [
+                 "--log-level",
+                 "warn",
+                 "--listen",
+                 "127.0.0.1:4443",
+                 "--listen-tls-cert",
+                 cert,
+                 "--listen-tls-key",
+                 key,
+                 "--auth-public",
+                 "**"
+               ]
     end
   end
 end

@@ -132,7 +132,7 @@ defmodule ExMoQ.RelayTest do
       assert Process.whereis(__MODULE__.Relay) == relay
 
       info = Relay.info(relay)
-      assert info.quic == {"https://127.0.0.1:#{quic}", :generated}
+      assert info.quic == "https://127.0.0.1:#{quic}"
       assert info.tcp == "tcp://127.0.0.1:#{tcp}"
       assert info.web == "http://127.0.0.1:#{quic}"
       assert info.internal == "http://127.0.0.1:#{internal}"
@@ -148,6 +148,32 @@ defmodule ExMoQ.RelayTest do
 
       assert :ok = Relay.stop(__MODULE__.Relay)
       refute Process.alive?(relay)
+    end
+
+    @tag :tmp_dir
+    test "serves a certificate loaded from files", %{tmp_dir: dir} do
+      %{cert: cert_der, key: key} =
+        :public_key.pkix_test_root_cert(~c"relay.test", key: {:namedCurve, :secp256r1})
+
+      cert_file = Path.join(dir, "cert.pem")
+      key_file = Path.join(dir, "key.pem")
+
+      File.write!(cert_file, :public_key.pem_encode([{:Certificate, cert_der, :not_encrypted}]))
+
+      File.write!(
+        key_file,
+        :public_key.pem_encode([:public_key.pem_entry_encode(:ECPrivateKey, key)])
+      )
+
+      quic = free_port()
+      options = [quic: {quic, tls: {:files, cert_file, key_file}}, web: quic, log: :none]
+      info = {Relay, options} |> start_supervised!() |> Relay.info()
+
+      assert info.quic == "https://127.0.0.1:#{quic}"
+      assert {200, fingerprint} = get(info.web <> "/certificate.sha256")
+
+      assert String.trim(fingerprint) ==
+               Base.encode16(:crypto.hash(:sha256, cert_der), case: :lower)
     end
 
     test "logs at its :log level despite a RUST_LOG in the environment" do

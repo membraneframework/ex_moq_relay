@@ -8,21 +8,13 @@ defmodule ExMoQ.Relay.Args do
 
   @spec args(Options.t()) :: [String.t()]
   def args(%Options{} = options) do
-    tls =
-      with {_port, quic_opts} <- options.quic,
-           host when host != nil <- quic_opts[:tls_generate] do
-        ["--listen-tls-generate", host]
-      else
-        _no_certificate -> []
-      end
-
     Enum.concat([
       ["--log-level", log_level(options.log)],
       listen_flag(options, "--listen", :quic),
       listen_flag(options, "--listen-tcp-bind", :tcp),
       listen_flag(options, "--web-http-listen", :web),
       listen_flag(options, "--internal-listen", :internal),
-      tls,
+      tls(options.quic),
       auth(options.auth),
       options.args
     ])
@@ -48,6 +40,16 @@ defmodule ExMoQ.Relay.Args do
   @spec address(:inet.ip_address(), :inet.port_number()) :: String.t()
   def address(ip, port) when tuple_size(ip) == 8, do: "[#{:inet.ntoa(ip)}]:#{port}"
   def address(ip, port), do: "#{:inet.ntoa(ip)}:#{port}"
+
+  @spec tls(Options.quic_listener() | nil) :: [String.t()]
+  defp tls(nil), do: []
+
+  defp tls({_port, quic_opts}) do
+    case Keyword.fetch!(quic_opts, :tls) do
+      {:generate, hosts} -> ["--listen-tls-generate", Enum.join(hosts, ",")]
+      {:files, cert, key} -> ["--listen-tls-cert", cert, "--listen-tls-key", key]
+    end
+  end
 
   @spec auth(Relay.auth() | nil) :: [String.t()]
   defp auth(nil), do: []

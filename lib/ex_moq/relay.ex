@@ -4,7 +4,7 @@ defmodule ExMoQ.Relay do
   as a supervised OS process.
 
       {:ok, relay} = ExMoQ.Relay.start_link(quic: 4443)
-      ExMoQ.Relay.info(relay).quic  #=> {"https://127.0.0.1:4443", :generated}
+      ExMoQ.Relay.info(relay).quic  #=> "https://127.0.0.1:4443"
   """
 
   use GenServer
@@ -16,9 +16,8 @@ defmodule ExMoQ.Relay do
 
     * `:binary` - path to the relay, otherwise resolved with `find_binary/1`.
     * `:quic` - the QUIC listener (default `4443`), or `nil` for none.
-      The certificate is generated for `"localhost"`;
-      `{port, tls_generate: host}` names another host,
-      and `{port, tls_generate: nil}` generates none, for one passed in `:args`.
+      `{port, tls: tls}` sets its certificate, see `t:tls/0`
+      (default `{:generate, ["localhost"]}`).
     * `:tcp` - a plaintext TCP listener (none by default).
     * `:web` - the HTTP listener serving `moq-relay`
       [endpoints](https://doc.moq.dev/bin/relay/http.html) (none by default).
@@ -61,7 +60,16 @@ defmodule ExMoQ.Relay do
 
   @type quic_listener :: :inet.port_number() | {:inet.port_number(), quic_listener_opts()}
 
-  @type quic_listener_opts :: [{:ip, :inet.ip_address()} | {:tls_generate, String.t() | nil}]
+  @type quic_listener_opts :: [{:ip, :inet.ip_address()} | {:tls, tls()}]
+
+  @typedoc """
+  The certificate of the QUIC listener.
+
+  * `{:generate, hosts}` - self-signed by the relay at startup for `hosts`.
+  Clients pin it by its hash, served by the web listener at `/certificate.sha256`.
+  * `{:files, cert, key}` - paths to a PEM certificate chain and its private key.
+  """
+  @type tls :: {:generate, [String.t(), ...]} | {:files, cert :: Path.t(), key :: Path.t()}
 
   @typedoc """
   How sessions are admitted.

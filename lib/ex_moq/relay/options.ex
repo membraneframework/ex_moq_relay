@@ -40,7 +40,8 @@ defmodule ExMoQ.Relay.Options do
   def validate(options) do
     with {:ok, options} <- opts(options, @enforce_keys),
          {:ok, log} <- log(options[:log]),
-         {:ok, quic} <- listener(:quic, options[:quic], tls_generate: "localhost"),
+         {:ok, quic} <- listener(:quic, options[:quic], tls: {:generate, ["localhost"]}),
+         :ok <- tls(quic),
          {:ok, tcp} <- listener(:tcp, options[:tcp], []),
          {:ok, web} <- listener(:web, options[:web], []),
          {:ok, internal} <- listener(:internal, options[:internal], []),
@@ -96,6 +97,24 @@ defmodule ExMoQ.Relay.Options do
       end
     else
       {:ok, auth}
+    end
+  end
+
+  @spec tls(quic_listener() | nil) :: :ok | {:error, String.t()}
+  defp tls(nil), do: :ok
+
+  defp tls({_port, quic_opts}) do
+    case Keyword.fetch!(quic_opts, :tls) do
+      {:generate, [_host | _hosts] = hosts} ->
+        if Enum.all?(hosts, fn host -> is_binary(host) and host != "" end),
+          do: :ok,
+          else: {:error, ":tls {:generate, hosts} needs host names, got: #{inspect(hosts)}"}
+
+      {:files, cert, key} when is_binary(cert) and is_binary(key) ->
+        :ok
+
+      other ->
+        {:error, ":tls must be {:generate, hosts} or {:files, cert, key}, got: #{inspect(other)}"}
     end
   end
 
