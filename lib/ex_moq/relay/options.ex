@@ -105,8 +105,8 @@ defmodule ExMoQ.Relay.Options do
 
   defp tls({_port, quic_opts}) do
     case Keyword.fetch!(quic_opts, :tls) do
-      {:generate, [_host | _hosts] = hosts} ->
-        if Enum.all?(hosts, fn host -> is_binary(host) and host != "" end),
+      {:generate, hosts} ->
+        if valid_hosts?(hosts),
           do: :ok,
           else: {:error, ":tls {:generate, hosts} needs host names, got: #{inspect(hosts)}"}
 
@@ -117,6 +117,12 @@ defmodule ExMoQ.Relay.Options do
         {:error, ":tls must be {:generate, hosts} or {:files, cert, key}, got: #{inspect(other)}"}
     end
   end
+
+  @spec valid_hosts?(term()) :: boolean()
+  defp valid_hosts?([_x | _xs] = list),
+    do: Enum.all?(list, fn x -> is_binary(x) and x != "" end)
+
+  defp valid_hosts?(_other), do: false
 
   @spec require_listener(term(), term()) :: :ok | {:error, String.t()}
   defp require_listener(nil, nil),
