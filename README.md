@@ -15,8 +15,8 @@ def deps do
 end
 ```
 
-It runs moq-relay 0.15.0 or later, installed with `cargo install moq-relay`
-or from a [release](https://github.com/moq-dev/moq/releases).
+Tested with moq-relay 0.15-0.17, available through `cargo install moq-relay`
+or [moq-dev releases](https://github.com/moq-dev/moq/releases).
 
 ## Usage
 
