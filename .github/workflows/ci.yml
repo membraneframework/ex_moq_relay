@@ -18,6 +18,6 @@ jobs:
     with:
       test-flags: "--warnings-as-errors"
       setup-commands: |
-        VERSION=0.15.8
+        VERSION=0.17.17
         curl -fsSL "https://github.com/moq-dev/moq/releases/download/moq-relay-v${VERSION}/moq-relay-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
           | tar -xz --strip-components=2 -C /usr/local/bin "moq-relay-v${VERSION}-x86_64-unknown-linux-gnu/bin/moq-relay"
