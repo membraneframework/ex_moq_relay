@@ -1,0 +1,18 @@
+# Needed for :httpc calls in test code
+Mix.ensure_application!(:inets)
+Mix.ensure_application!(:ssl)
+{:ok, _apps} = Application.ensure_all_started(:inets)
+
+ExUnit.start(capture_log: true)
+
+cond do
+  ExMoQ.Relay.find_binary() ->
+    :ok
+
+  System.get_env("CI") == "true" ->
+    raise "moq-relay not found — integration tests must not be skipped in CI"
+
+  true ->
+    IO.puts("moq-relay not found — excluding :integration tests")
+    ExUnit.configure(exclude: [:integration])
+end
