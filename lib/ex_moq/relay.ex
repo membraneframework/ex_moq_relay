@@ -97,7 +97,6 @@ defmodule ExMoQ.Relay do
   """
   @type log :: Logger.level() | {Logger.level(), (String.t() -> any())} | :none
 
-  @typedoc "Why the relay did not start."
   @type start_error ::
           {:validation_failed, String.t()}
           | {:binary_not_found, name :: Path.t()}
